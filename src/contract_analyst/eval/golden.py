@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from contract_analyst.models import DocKind, OpType, ValueStatus
 
@@ -21,6 +21,12 @@ class GoldenValue(BaseModel):
     status: ValueStatus = ValueStatus.ACCEPTED
     page: int | None = None
     quote: str | None = None
+
+    @model_validator(mode="after")
+    def _empty_is_absent(self) -> GoldenValue:
+        if self.value is None and self.status == ValueStatus.ACCEPTED:
+            self.status = ValueStatus.ABSENT
+        return self
 
 
 class GoldenRate(BaseModel):

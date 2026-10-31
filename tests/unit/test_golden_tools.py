@@ -27,3 +27,85 @@ def test_yaml_roundtrip_keeps_dates_and_decimals(tmp_path):
     dump_golden(gs, tmp_path / "g.yaml")
     back = load_golden(tmp_path / "g.yaml")
     assert back == gs and back.chains[0].rates_at[date(2026, 10, 30)][0].amount == Decimal("330.5")
+
+
+from contract_analyst.eval.golden import GoldenDocument, GoldenTrap, GoldenValue
+from contract_analyst.eval.golden_tools import build_review_page, check_golden, diff_golden
+
+PAGE = "Договор № D990000001-01\nг. Тверь 19.08.2020 г.\nСтавка составляет 500 рублей без НДС."
+
+
+def _gdoc(**kw):
+    base = {"file": "m.pdf", "doc_id": "d1", "kind": "main",
+                "number": GoldenValue(value="D990000001-01", page=1, quote="Договор № D990000001-01"),
+                "doc_date": GoldenValue(value="2020-08-19", page=1, quote="г. Тверь 19.08.2020 г.")}
+    base.update(kw)
+    return GoldenDocument(**base)
+
+
+def _gs(**kw):
+    chain = GoldenChain(contract_number="D990000001-01", main_doc_id="d1", order=["d1"],
+                        status_at={date(2026, 10, 30): "active"},
+                        rates_at={date(2026, 10, 30): [GoldenRate(label="Ставка", amount=Decimal(500))]})
+    rates = [GoldenRate(label="Ставка", amount=Decimal(500), page=1, quote="Ставка составляет 500 рублей без НДС")]
+    base = {"as_of_dates": [date(2026, 10, 30)], "documents": [_gdoc(rates=rates)], "chains": [chain]}
+    base.update(kw)
+    return GoldenSet(**base)
+
+
+def test_diff_finds_disagreement():
+    other = _gs(documents=[_gdoc(number=GoldenValue(value="D990000009-01", page=1, quote="x"))])
+    assert "documents[d1].number" in [d.path for d in diff_golden(_gs(), other)]
+
+
+def test_diff_tolerates_paraphrased_terms():
+    a = _gs(documents=[_gdoc(terms={"validity": GoldenValue(value="до 31.12.2026 с пролонгацией")})])
+    b = _gs(documents=[_gdoc(terms={"validity": GoldenValue(value="действует до 31.12.2026 с автоматической пролонгацией")})])
+    assert not [d for d in diff_golden(a, b) if "terms" in d.path]
+
+
+def test_check_passes_consistent_set():
+    assert check_golden(_gs(), {"d1": text_doc([PAGE], doc_id="d1")}) == []
+
+
+def test_check_catches_missing_quote():
+    bad = _gs(documents=[_gdoc(city=GoldenValue(value="Псков", page=1, quote="г. Псков"))])
+    errors = check_golden(bad, {"d1": text_doc([PAGE], doc_id="d1")})
+    assert any("quote" in e and "city" in e for e in errors)
+
+
+def test_check_catches_consolidation_mismatch():
+    wrong = _gs()
+    wrong.chains[0].rates_at[date(2026, 10, 30)] = [GoldenRate(label="Ставка", amount=Decimal(900))]
+    assert any("rates_at" in e for e in check_golden(wrong, {"d1": text_doc([PAGE], doc_id="d1")}))
+
+
+def test_check_requires_traps():
+    errors = check_golden(_gs(traps=[GoldenTrap(trap_id="T2", kind="doc_kind_is")]), {"d1": text_doc([PAGE], doc_id="d1")},
+                          required_traps={"T1", "T2"})
+    assert "missing trap T1" in errors
+
+
+def test_review_page_has_all_disputed_and_sample(tmp_path):
+    from contract_analyst.eval.golden_tools import GoldenDiff
+
+    terms = {f"t{i}": GoldenValue(value=f"условие {i}", page=1, quote=f"цитата {i}") for i in range(10)}
+    gs = _gs(documents=[_gdoc(terms=terms)])
+    disputed = [GoldenDiff(path="documents[d1].city", a="Тверь", b="Псков")]
+    html = build_review_page(gs, disputed, tmp_path / "r.html", sample_share=0.2).read_text()
+    assert "documents[d1].city" in html and "Псков" in html
+    assert html.count('class="sample"') >= 2
+
+
+def test_cli_golden_diff_writes_json(tmp_path):
+    import json
+
+    from typer.testing import CliRunner
+
+    from contract_analyst.cli import app
+
+    dump_golden(_gs(), tmp_path / "a.yaml")
+    dump_golden(_gs(documents=[_gdoc(city=GoldenValue(value="Тверь", page=1, quote="г. Тверь"))]), tmp_path / "b.yaml")
+    res = CliRunner().invoke(app, ["golden", "diff", str(tmp_path / "a.yaml"), str(tmp_path / "b.yaml"),
+                                   "--out", str(tmp_path / "d.json")])
+    assert res.exit_code == 0 and json.loads((tmp_path / "d.json").read_text())[0]["path"] == "documents[d1].city"
