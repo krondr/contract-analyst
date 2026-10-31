@@ -71,8 +71,19 @@ def run_analysis(input_dir: Path, settings: Settings, as_of: date, variant: Lite
             steps.ingest_all(ctx)
             _restrict_to_chain(ctx, only_chain)
             graph = build_hybrid_graph(ctx, with_ingest=False)
+    elif variant == "A":
+        from contract_analyst.agent.graph_pipeline import build_pipeline_graph
+
+        if only_chain:
+            from contract_analyst.agent import steps
+
+            steps.ingest_all(ctx)
+            _restrict_to_chain(ctx, only_chain)
+        graph = build_pipeline_graph(ctx)
     else:
-        raise NotImplementedError(f"variant {variant} arrives with experiment E4")
+        from contract_analyst.agent.graph_full import build_full_agent_graph
+
+        graph = build_full_agent_graph(ctx)
     graph.invoke({"messages": [], "plan": [], "reflection_round": 0, "gaps": []},
                  config={"recursion_limit": settings.max_steps * 3 + 20})
     seconds = round(time.monotonic() - started, 1)

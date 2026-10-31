@@ -72,11 +72,18 @@ class ToolSpec:
     fn: Callable[[RunContext, ThoughtArgs], ToolResult]
 
 
+def _list_inputs(ctx: RunContext) -> ToolResult:
+    if ctx.agent_reads and not ctx.documents:
+        return steps.list_only(ctx)
+    if not ctx.documents:
+        return steps.ingest_all(ctx)
+    return ToolResult(status="ok", data=steps.fit({"files": len(ctx.inventory), "unprocessed": ctx.unprocessed,
+                                                   "documents": [steps.doc_line(ctx, d) for d in ctx.documents.values()]}))
+
+
 TOOLS: dict[str, ToolSpec] = {spec.name: spec for spec in [
     ToolSpec("list_inputs", "Опись входных файлов: формат, способ чтения страниц, найденные номера, качество.",
-             ListInputsArgs, lambda ctx, a: steps.ingest_all(ctx) if not ctx.documents else steps.ToolResult(
-                 status="ok", data=steps.fit({"files": len(ctx.inventory), "unprocessed": ctx.unprocessed,
-                                              "documents": [steps.doc_line(ctx, d) for d in ctx.documents.values()]}))),
+             ListInputsArgs, lambda ctx, a: _list_inputs(ctx)),
     ToolSpec("read_document", "Прочитать файл (текстовый слой или OCR) — для файла, которого ещё нет в описи.",
              ReadDocumentArgs, lambda ctx, a: steps.read_one(ctx, a.file_name)),
     ToolSpec("rerecognize", "Перераспознать страницы скана другими настройками, если уверенность OCR низкая.",

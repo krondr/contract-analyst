@@ -45,6 +45,7 @@ class RunContext:
     only_doc_ids: set[str] | None = None
     only_paths: set[str] | None = None
     safety_net: list[str] = field(default_factory=list)
+    agent_reads: bool = False
     read_cache: Path | None = None
     report_path: Path | None = None
     removed_claims: int = 0

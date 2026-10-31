@@ -107,6 +107,13 @@ def ingest_all(ctx: RunContext) -> ToolResult:
         "documents": [doc_line(ctx, d) for d in ctx.documents.values()]}))
 
 
+def list_only(ctx: RunContext) -> ToolResult:
+    """Variant C: the agent sees the file list and decides how to read each file."""
+    ctx.inventory = list_inputs(ctx.input_dir)
+    return ToolResult(status="ok", data=fit({"files": [{"file": f.name, "format": f.format.value, "bytes": f.size_bytes,
+                                                       "duplicate_of": f.duplicate_of} for f in ctx.inventory]}))
+
+
 def read_one(ctx: RunContext, file_name: str) -> ToolResult:
     if not ctx.inventory:
         ctx.inventory = list_inputs(ctx.input_dir)
