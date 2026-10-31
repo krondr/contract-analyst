@@ -59,11 +59,16 @@ def doc_line(ctx: RunContext, doc: DocumentText) -> dict:
             "number": header.number if header else None, "parent": header.parent_number if header else None}
 
 
+def _unprocessed(ctx: RunContext, file: str, reason: str) -> None:
+    ctx.unprocessed.append({"file": file, "reason": reason})
+    ctx.trace.event("error", "ingest", file=file, message=reason)
+
+
 def _register(ctx: RunContext, doc: DocumentText) -> None:
     if doc.status == "error":
-        ctx.unprocessed.append({"file": doc.file.name, "reason": ", ".join(doc.issues) or "error"})
+        _unprocessed(ctx, doc.file.name, ", ".join(doc.issues) or "error")
     elif doc.status == "empty":
-        ctx.unprocessed.append({"file": doc.file.name, "reason": "empty: текст не найден"})
+        _unprocessed(ctx, doc.file.name, "empty: текст не найден")
     else:
         ctx.documents[doc.doc_id] = doc
         ctx.headers[doc.doc_id] = parse_header(doc.pages[0].text if doc.pages else "")
@@ -84,7 +89,7 @@ def ingest_all(ctx: RunContext) -> ToolResult:
     todo = []
     for f in ctx.inventory:
         if f.duplicate_of:
-            ctx.unprocessed.append({"file": f.name, "reason": f"дубликат файла {names.get(f.duplicate_of, f.duplicate_of)}"})
+            _unprocessed(ctx, f.name, f"дубликат файла {names.get(f.duplicate_of, f.duplicate_of)}")
         else:
             todo.append(f)
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -176,9 +181,12 @@ def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None =
         try:
             record = understand_document(doc, ctx.headers[doc_id], ctx.client, ctx.settings, groups)
         except (TimeoutError, httpx.TimeoutException) as exc:
-            ctx.unprocessed.append({"file": doc.file.name, "reason": f"llm_timeout: {exc}"})
+            _unprocessed(ctx, doc.file.name, f"llm_timeout: {exc}")
             skipped.append(doc_id)
             continue
+        for issue in record.issues:
+            if issue.code in ("llm_invalid_json", "llm_timeout"):
+                ctx.trace.event("error", "tools", doc_id=doc_id, message=f"{issue.code}: {issue.message}")
         if groups and doc_id in ctx.records:
             record = _merge_records(ctx.records[doc_id], record, groups)
         ctx.records[doc_id] = record

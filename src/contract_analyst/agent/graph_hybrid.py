@@ -23,6 +23,15 @@ REQUIRED_HEADINGS = ["## 1. Сводка запуска", "## 2. Опись до
                      "## 5. Отказы и противоречия", "## 6. Не обработано", "## 7. Reflection"]
 
 
+def safe_structured(ctx: RunContext, node: str, messages, schema):
+    """Structured call where a timeout counts as a failed answer instead of crashing the run."""
+    try:
+        return call_structured(ctx.client, messages, schema)
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        ctx.trace.event("error", node, message=f"LLM timeout: {exc}")
+        return StructuredFailure(errors=[f"timeout: {exc}"], raw=[])
+
+
 def reflect_checklist(ctx: RunContext) -> list[ReflectionItem]:
     scope = [d for d in ctx.documents.values() if ctx.only_doc_ids is None or d.doc_id in ctx.only_doc_ids]
     missing = [d.file.name for d in scope if d.doc_id not in ctx.records]
@@ -66,8 +75,8 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
     def planner(state: AgentState) -> dict:
         inventory = _inventory_text(ctx) if with_ingest else "Файлы ещё не прочитаны: начни с list_inputs."
         prompt = load_prompt("planner")
-        plan = call_structured(ctx.client, [{"role": "system", "content": prompt.render(as_of=ctx.as_of)},
-                                            {"role": "user", "content": inventory}], PlanOut)
+        plan = safe_structured(ctx, "planner", [{"role": "system", "content": prompt.render(as_of=ctx.as_of)},
+                                                {"role": "user", "content": inventory}], PlanOut)
         items = (plan.items if not isinstance(plan, StructuredFailure) else []) + MANDATORY
         ctx.trace.event("plan", "planner", items=items)
         system = load_prompt("executor").render(as_of=ctx.as_of, plan=items, with_ingest=with_ingest)
@@ -103,7 +112,7 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
         items = reflect_checklist(ctx)
         prompt = load_prompt("reflector")
         summary = "\n".join(f"- {'OK' if i.ok else 'НЕТ'}: {i.item} ({i.note})" for i in items)
-        verdict = call_structured(ctx.client, [
+        verdict = safe_structured(ctx, "reflector", [
             {"role": "system", "content": prompt.render(plan=state["plan"])},
             {"role": "user", "content": f"Проверки кодом:\n{summary}"}], ReflectionOut)
         llm_gaps = [] if isinstance(verdict, StructuredFailure) else verdict.gaps
