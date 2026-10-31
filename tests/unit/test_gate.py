@@ -96,3 +96,12 @@ def test_rate_quote_reanchored_to_the_line_with_label_and_amount(doc):
 def test_rate_not_reanchored_when_no_line_has_both(doc):
     row = gate_rate(RateOut(label="Тариф Б", amount="700", page=1, quote="Тариф Б"), doc, load_settings())
     assert row.status == "rejected"
+
+
+def test_rate_reanchored_in_table_with_cells_on_separate_lines():
+    table = text_doc(["Таблица №1\nСтавка (руб. без НДС) с 01.07.2026\nс 01.01.2027\nТариф Старт\n270\n500\nОптима\n330,5\n500\n"])
+    row = gate_rate(RateOut(label="Оптима", amount="500", valid_from="2027-01-01", page=1,
+                            quote="Ставка (руб. без НДС) с 01.07.2026"), table, load_settings())
+    assert row.status == "accepted" and row.source.quote == "Оптима 330,5 500"
+    wrong = gate_rate(RateOut(label="Оптима", amount="270", page=1, quote="Ставка"), table, load_settings())
+    assert wrong.status == "rejected"

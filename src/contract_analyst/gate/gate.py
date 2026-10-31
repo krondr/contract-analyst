@@ -94,7 +94,8 @@ def _doc_dates(doc: DocumentText) -> set[date]:
 
 
 def _reanchor(row: RateOut, amount, doc: DocumentText) -> tuple[int, str] | None:
-    """Find a line that carries both the rate label and its amount — table rows often get quoted without the number."""
+    """Find the evidence for a table rate: a line with every label word and the amount, or — when cells are
+    extracted one per line — the label followed directly by its numbers in the text stream."""
     import re
 
     from contract_analyst.ingest.normalize import normalize_text
@@ -104,12 +105,25 @@ def _reanchor(row: RateOut, amount, doc: DocumentText) -> tuple[int, str] | None
         return set(re.findall(r"[0-9a-zа-яё]+", normalize_text(text).casefold()))
 
     label = words(row.label)
+    label_flat = " ".join(normalize_text(row.label).split()).casefold()
     pages = [doc.pages[row.page - 1]] if 1 <= row.page <= len(doc.pages) else []
     pages += [p for p in doc.pages if p.number != row.page]
     for page in pages:
         for line in page.text.split("\n"):
             if amount in find_numbers(line) and label and label <= words(line):
                 return page.number, line.strip()
+        flat = " ".join(normalize_text(page.text).split())
+        for m in re.finditer(re.escape(label_flat), flat.casefold()) if label_flat else []:
+            end = m.end()
+            for token in re.finditer(r"\S+", flat[m.end():m.end() + 80]):
+                text = token.group(0)
+                if re.fullmatch(r"[:–—-]", text):
+                    continue
+                if not re.fullmatch(r"\d[\d.,]*", text):
+                    break
+                end = m.end() + token.end()
+                if amount in find_numbers(text):
+                    return page.number, flat[m.start():end]
     return None
 
 
