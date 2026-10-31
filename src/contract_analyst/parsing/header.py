@@ -9,7 +9,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from contract_analyst.ingest.normalize import normalize_text
-from contract_analyst.parsing.patterns import find_dates, find_doc_numbers
+from contract_analyst.parsing.patterns import _OCR_NUMBER_RE, find_dates, find_doc_numbers
 
 _TITLE_RE = re.compile(r"^\s*(дополнительное\s+соглашение|соглашение|договор)\b", re.IGNORECASE)
 _TITLE_KIND = {"дополнительное": "supplement", "соглашение": "agreement", "договор": "contract"}
@@ -34,13 +34,13 @@ class HeaderGuess(BaseModel):
 def _parent_reference(text: str) -> tuple[str, date, str] | None:
     for anchor in _PARENT_ANCHOR_RE.finditer(text):
         window = text[anchor.end(): anchor.end() + _PARENT_WINDOW]
-        numbers = list(re.finditer(r"D\d{9}(?:-\d{2})?", window))
+        numbers = list(_OCR_NUMBER_RE.finditer(window))
         dates = [(window.find(span), d, span) for d, span in find_dates(window)]
         if not numbers or not dates:
             continue
         num = numbers[0]
         pos, d, span = min(dates, key=lambda item: abs(item[0] - num.start()))
-        return num.group(0), d, text[anchor.start(): anchor.end() + max(num.end(), pos + len(span))]
+        return f"D{num.group(1)}", d, text[anchor.start(): anchor.end() + max(num.end(), pos + len(span))]
     return None
 
 

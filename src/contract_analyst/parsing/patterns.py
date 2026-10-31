@@ -53,8 +53,13 @@ def parse_ru_date(s: str) -> date | None:
     return found[0][0] if found else None
 
 
+# OCR on scans reads the leading Latin D as 0, Cyrillic О or Д; the -NN suffix keeps this from matching
+# arbitrary ten-digit numbers.
+_OCR_NUMBER_RE = re.compile(r"(?<![0-9A-Za-zА-Яа-я])(?:D|[0ОOДD](?=\d{9}-\d{2}(?!\d)))(\d{9}(?:-\d{2})?)(?!\d)")
+
+
 def find_doc_numbers(text: str) -> list[str]:
-    return DOC_NUMBER_RE.findall(text)
+    return [f"D{m.group(1)}" for m in _OCR_NUMBER_RE.finditer(text)]
 
 
 def _to_decimal(raw: str) -> Decimal | None:

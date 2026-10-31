@@ -16,7 +16,7 @@ from contract_analyst.models import (
     OpType,
     ValueStatus,
 )
-from contract_analyst.parsing.patterns import DOC_NUMBER_RE
+from contract_analyst.parsing.patterns import find_doc_numbers
 
 _GOOD = (ValueStatus.ACCEPTED, ValueStatus.CONFLICT)
 _YEAR_RE = re.compile(r"^D(\d{2})")
@@ -133,15 +133,16 @@ def build_chains(records: list[DocumentRecord]) -> list[ContractChain]:
             for op in r.ops:
                 if op.status != ValueStatus.ACCEPTED or not op.target:
                     continue
-                target = DOC_NUMBER_RE.search(op.target)
-                if op.op == OpType.INVALIDATE_DOCUMENT and target and target.group(0) in by_doc:
-                    by_doc[target.group(0)].invalidated_by = r.doc_id
+                targets = find_doc_numbers(op.target)
+                target = targets[0] if targets else None
+                if op.op == OpType.INVALIDATE_DOCUMENT and target and target in by_doc:
+                    by_doc[target].invalidated_by = r.doc_id
                     issues.append(Issue(code="invalidated",
-                                        message=f"{target.group(0)} признан недействительным документом {_value(r.number)}",
+                                        message=f"{target} признан недействительным документом {_value(r.number)}",
                                         sources=[s for s in [op.source] if s]))
-                elif target and target.group(0) not in by_number:
+                elif target and target not in by_number:
                     issues.append(Issue(code="target_missing",
-                                        message=f"{_value(r.number)} изменяет {target.group(0)}, которого нет в пакете",
+                                        message=f"{_value(r.number)} изменяет {target}, которого нет в пакете",
                                         sources=[s for s in [op.source] if s]))
 
         main_names = _names(main) if main else set()

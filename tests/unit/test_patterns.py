@@ -45,3 +45,9 @@ def test_find_numbers_keeps_both_readings_of_space_separated_table_cells():
     assert Decimal(270) in found and Decimal(500) in found and Decimal(270500) in found
     assert find_numbers("Пакет Мини 675 1000") == [Decimal(675), Decimal(1000)]
     assert parse_money("1 500 рублей") == Decimal(1500)
+
+
+def test_ocr_misread_leading_d_is_normalized():
+    assert find_doc_numbers("Соглашение № 0990000017-09 к Договору №0980000016-09") == ["D990000017-09", "D980000016-09"]
+    assert find_doc_numbers("ДОГОВОР № Д990000018-01") == ["D990000018-01"]
+    assert find_doc_numbers("индекс 109147 и счёт 0123456789") == []

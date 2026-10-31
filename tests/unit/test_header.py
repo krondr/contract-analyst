@@ -33,3 +33,8 @@ def test_detect_draft():
     assert detect_draft("Проект Договора.pdf", "Договор № D990000003-01")
     assert detect_draft("x.pdf", "ПРОЕКТ\nДоговор № D990000003-01")
     assert not detect_draft("D990000003-01.pdf", "Договор № D990000003-01\nпроект торговой точки")
+
+
+def test_header_on_ocr_text_with_misread_d():
+    h = parse_header("ДОГОВОР № 0990000018-01\nк Договору № 0980000016-09 от 15.12.2015 г.")
+    assert (h.number, h.parent_number) == ("D990000018-01", "D980000016-09")
