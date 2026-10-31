@@ -24,6 +24,7 @@ def analyze(data: Path,
             chain: Annotated[str | None, typer.Option(help="Номер договора: разобрать только эту цепочку")] = None,
             doc: Annotated[Path | None, typer.Option(help="Разобрать только этот файл")] = None,
             llm_cache: Annotated[str | None, typer.Option(help="record | replay | off")] = None,
+            cache_file: Annotated[Path, typer.Option(help="Файл кэша ответов модели")] = Path("data/cache/llm.sqlite"),
             out: Annotated[Path, typer.Option(help="Папка для результатов")] = Path("runs")) -> None:
     """Разобрать пакет документов и собрать отчёт."""
     from datetime import date
@@ -35,7 +36,8 @@ def analyze(data: Path,
     settings = load_settings(**overrides)
     when = date.fromisoformat(as_of) if as_of else date.today()
     try:
-        result = run_analysis(data, settings, when, settings.agent_variant, only_chain=chain, only_doc=doc, out_dir=out)
+        result = run_analysis(data, settings, when, settings.agent_variant, only_chain=chain, only_doc=doc, out_dir=out,
+                              llm_cache=cache_file)
     except LLMUnavailable as exc:
         typer.echo(exc.hint)
         raise typer.Exit(2) from None

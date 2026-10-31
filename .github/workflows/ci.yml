@@ -1,0 +1,16 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages (Tesseract with Russian)
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-rus
+      - uses: astral-sh/setup-uv@v5
+      - name: Install
+        run: uv sync
+      - name: Lint
+        run: uv run ruff check .
+      - name: Tests (no real data, no live model)
+        run: uv run pytest -q -p no:warnings -m "not real and not ollama"
