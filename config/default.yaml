@@ -1,0 +1,61 @@
+# Defaults for contract-analyst. Values marked "E1/E2/E3/E4" are set from experiment winners.
+llm_model: "ollama:qwen3:8b"          # E2
+ollama_url: "http://localhost:11434"   # overridden by CA_OLLAMA_URL
+llm_num_ctx: 16384
+llm_batch_tokens: 6000
+llm_cache_mode: record                 # record | replay | off
+
+ocr_engine: tesseract                  # E1: tesseract | rapidocr
+ocr_preprocess: none                   # E1: none | deskew_sauvola
+ocr_dpi: 300
+ocr_word_conf_threshold: 0.80          # E1 calibration
+ocr_quote_fuzzy_threshold: 90
+text_layer_min_chars: 50
+low_quality_ratio: 0.2
+
+agent_variant: B                       # E4: A | B | C
+consolidation_mode: code               # E3: code | llm
+max_steps: 60
+max_seconds: 1800
+max_reflection_rounds: 2
+
+subject_categories:
+  commercial_representation: "Коммерческое представительство"
+  partner_promotion: "Партнёрское продвижение"
+  sales_targets_agreement: "Соглашение о плановых показателях"
+  lease: "Аренда"
+  sale: "Купля-продажа"
+  services: "Оказание услуг"
+  supply: "Поставка"
+  other: "Иное"
+
+# Key order = order of LLM calls. A new field needs only an entry here and in field_descriptions.
+field_groups:
+  header: [kind, number, doc_date, city, parent, effective_from, parties, subject_category]
+  core_terms: [subject, validity, payment_terms, termination, notification_channel, penalties]
+  money: [rates]
+  dealer: [plan_indicators, tariff_groups, trade_points]
+  ops: [ops]
+
+field_descriptions:
+  kind: "Вид документа: основной договор, дополнительное соглашение, рамочное соглашение или неизвестно"
+  number: "Номер документа из заголовка"
+  doc_date: "Дата подписания документа"
+  city: "Город заключения документа"
+  parent: "Номер и дата договора, к которому относится соглашение, как они написаны в тексте"
+  effective_from: "Дата вступления документа в силу или дата, с которой он распространяет действие"
+  parties: "Стороны: роль, организационно-правовая форма, наименование"
+  subject_category: "Категория предмета договора из закрытого списка"
+  subject: "Предмет договора: что одна сторона поручает или передаёт другой"
+  validity: "Срок действия договора: дата окончания или порядок пролонгации"
+  payment_terms: "Порядок и сроки расчётов и выплат"
+  termination: "Порядок и основания расторжения"
+  notification_channel: "Способ и адреса для уведомлений и обмена документами"
+  penalties: "Штрафы и неустойки: за что и в каком размере"
+  rates: "Ставки цены или вознаграждения: название, сумма, НДС, период действия"
+  plan_indicators: "Плановые показатели продаж или начислений"
+  tariff_groups: "Группы тарифных планов и их состав"
+  trade_points: "Торговые точки, на которых исполняется договор"
+  ops: "Операции изменения: какой пункт, раздел, приложение или документ меняется и с какой даты"
+
+critical_fields: [number, doc_date, parent, effective_from, rates, ops]

@@ -1,0 +1,55 @@
+[project]
+name = "contract-analyst"
+version = "0.1.0"
+description = "Local AI agent that clusters contracts and consolidates supplementary agreements"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "langchain-core>=1.7.3",
+    "langchain-ollama>=1.1.0",
+    "langgraph>=1.2.19",
+    "langgraph-checkpoint-sqlite>=3.1.3",
+    "numpy>=2.5.4",
+    "onnxruntime>=1.31.1",
+    "opencv-contrib-python-headless>=5.0.0.93",
+    "pillow>=13.0.0",
+    "pydantic>=2.14.2",
+    "pymorphy3>=2.0.6",
+    "pymorphy3-dicts-ru>=2.4.417150.4580142",
+    "pymupdf>=2.0",
+    "pytesseract>=0.3.13",
+    "python-docx>=1.2.0",
+    "pyyaml>=6.0.3",
+    "rapidfuzz>=3.14.6",
+    "rapidocr>=3.10.0",
+    "rich>=15.0.0",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+contract-analyst = "contract_analyst.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.9.4,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pymupdf-fonts>=1.0.5",
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "real: needs data/raw and data/golden (local only)",
+    "ocr: needs the Tesseract binary with rus traineddata",
+    "ollama: needs a live Ollama model",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
