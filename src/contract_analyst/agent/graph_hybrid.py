@@ -98,9 +98,10 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
 
     def tools(state: AgentState) -> dict:
         out = []
+        message_text = state["messages"][-1].get("content") or ""
         for raw in state["messages"][-1]["tool_calls"]:
             call = ToolCall.model_validate(raw)
-            result = dispatch(ctx, call, guard)
+            result = dispatch(ctx, call, guard, message_text=message_text)
             out.append({"role": "tool", "tool_call_id": call.id, "name": call.name,
                         "content": json.dumps(result.model_dump(), ensure_ascii=False, default=str)})
         return {"messages": out}

@@ -13,9 +13,9 @@ def call(name, **args):
     return ToolCall(id="c1", name=name, args={"thought": "проверяю шаг", **args})
 
 
-def test_every_tool_requires_thought_and_has_schema():
+def test_every_tool_offers_thought_and_has_schema():
     for spec in TOOLS.values():
-        assert spec.args_model.model_fields["thought"].is_required()
+        assert "thought" in spec.args_model.model_json_schema()["properties"]
     names = {s["function"]["name"] for s in tool_schemas()}
     assert {"list_inputs", "read_document", "rerecognize", "analyze_document", "build_chains", "consolidate",
             "cluster_and_compare", "record_decision", "write_report"} <= names
@@ -52,7 +52,8 @@ def test_exception_becomes_error_result(ctx, monkeypatch):
 
 
 def test_bad_args_and_unknown_tool(ctx):
-    assert dispatch(ctx, ToolCall(id="x", name="read_document", args={"file_name": "a"}), Guard(10, 60)).error_type == "bad_args"
+    bad = ToolCall(id="x", name="rerecognize", args={"doc_id": "a", "pages": "все", "strategy": "magic"})
+    assert dispatch(ctx, bad, Guard(10, 60)).error_type == "bad_args"
     assert dispatch(ctx, call("format_disk"), Guard(10, 60)).error_type == "unknown_tool"
 
 
@@ -93,3 +94,14 @@ def test_analyze_resolves_document_number_and_file_stem(ctx, monkeypatch):
     ingest_all(ctx)
     assert dispatch(ctx, call("analyze_document", doc_id="D990000002-01"), Guard(10, 60)).data["analyzed"]
     assert dispatch(ctx, call("analyze_document", doc_id="Договор аренды"), Guard(10, 60)).data["analyzed"]
+
+
+def test_missing_thought_falls_back_to_message_text_and_is_flagged(ctx):
+    guard = Guard(10, 60)
+    result = dispatch(ctx, ToolCall(id="1", name="list_inputs", args={}), guard, message_text="Мысль: смотрю опись")
+    assert result.status == "ok"
+    no_text = dispatch(ctx, ToolCall(id="2", name="build_chains", args={}), guard)
+    assert no_text.status in ("ok", "empty")
+    thoughts = [e for e in read_trace(ctx.trace.path) if e["event"] == "thought"]
+    assert thoughts[0]["thought"] == "смотрю опись" and thoughts[0]["thought_source"] == "message"
+    assert thoughts[1]["thought_source"] == "missing"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -18,7 +19,7 @@ from contract_analyst.models import Decision, ToolResult
 
 
 class ThoughtArgs(BaseModel):
-    thought: str = Field(..., description="Что ты делаешь этим вызовом и зачем — одно-два предложения")
+    thought: str = Field("", description="Что ты делаешь этим вызовом и зачем — одно-два предложения")
 
 
 class ListInputsArgs(ThoughtArgs):
@@ -112,7 +113,18 @@ def tool_schemas(names: list[str] | None = None) -> list[dict]:
             for s in TOOLS.values() if names is None or s.name in names]
 
 
-def dispatch(ctx: RunContext, call: ToolCall, guard: Guard, node: str = "tools") -> ToolResult:
+_THOUGHT_PREFIX = re.compile(r"^\s*(?:мысль|thought)\s*[:\-—]\s*", re.IGNORECASE)
+
+
+def _thought(args: ThoughtArgs, message_text: str) -> tuple[str, str]:
+    """The model's own words: the thought argument, else the text it wrote next to the calls."""
+    if args.thought.strip():
+        return args.thought.strip(), "argument"
+    text = _THOUGHT_PREFIX.sub("", message_text.strip())
+    return (text[:500], "message") if text else ("", "missing")
+
+
+def dispatch(ctx: RunContext, call: ToolCall, guard: Guard, node: str = "tools", message_text: str = "") -> ToolResult:
     spec = TOOLS.get(call.name)
     if spec is None:
         result = ToolResult(status="error", error_type="unknown_tool", hint=f"Нет инструмента {call.name}")
@@ -126,14 +138,15 @@ def dispatch(ctx: RunContext, call: ToolCall, guard: Guard, node: str = "tools")
     except ValidationError as exc:
         ctx.trace.event("error", node, tool=call.name, message="bad arguments")
         return ToolResult(status="error", error_type="bad_args", hint=f"Неверные аргументы: {str(exc)[:300]}")
-    ctx.trace.event("thought", node, tool=call.name, thought=args.thought)
+    thought, source = _thought(args, message_text)
+    ctx.trace.event("thought", node, tool=call.name, thought=thought, thought_source=source)
     key = (call.name, json.dumps(args.model_dump(exclude={"thought"}), sort_keys=True, default=str))
     guard.steps += 1
     if guard.seen(key):
         result = ToolResult(status="error", error_type="repeat_call",
                             hint="Этот вызов уже был: смени аргументы или переходи к следующему шагу")
     else:
-        ctx.trace.event("tool_call", node, tool=call.name, thought=args.thought,
+        ctx.trace.event("tool_call", node, tool=call.name, thought=thought, thought_source=source,
                         args=args.model_dump(exclude={"thought"}, mode="json"))
         try:
             result = spec.fn(ctx, args)
