@@ -1,0 +1,14 @@
+[
+  {"structured": {"items": ["Разобрать все документы", "Собрать цепочки", "Свернуть условия", "Кластеры", "Отчёт"]}},
+  {"chat": {"content": "Разбираю документы", "tool_calls": [
+    {"id": "1", "name": "analyze_document", "args": {"thought": "Разбираю основной договор", "doc_id": "Договор аренды.pdf"}},
+    {"id": "2", "name": "analyze_document", "args": {"thought": "Разбираю первое соглашение", "doc_id": "ДС1.pdf"}},
+    {"id": "3", "name": "analyze_document", "args": {"thought": "Разбираю скан соглашения", "doc_id": "ДС2 скан.pdf"}}]}},
+  {"chat": {"content": "", "tool_calls": [{"id": "4", "name": "build_chains", "args": {"thought": "Собираю цепочки"}}]}},
+  {"chat": {"content": "", "tool_calls": [{"id": "5", "name": "consolidate", "args": {"thought": "Сворачиваю условия"}}]}},
+  {"chat": {"content": "", "tool_calls": [{"id": "6", "name": "cluster_and_compare", "args": {"thought": "Кластеризую"}}]}},
+  {"structured": {"summary": "Один договор аренды."}},
+  {"chat": {"content": "", "tool_calls": [{"id": "7", "name": "write_report", "args": {"thought": "Собираю отчёт"}}]}},
+  {"chat": {"content": "Готово", "tool_calls": []}},
+  {"structured": {"goal_met": true, "gaps": []}}
+]

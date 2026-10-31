@@ -43,6 +43,8 @@ class RunContext:
     unprocessed: list[dict] = field(default_factory=list)
     reflection: list[ReflectionItem] = field(default_factory=list)
     only_doc_ids: set[str] | None = None
+    only_paths: set[str] | None = None
+    safety_net: list[str] = field(default_factory=list)
     read_cache: Path | None = None
     report_path: Path | None = None
     removed_claims: int = 0

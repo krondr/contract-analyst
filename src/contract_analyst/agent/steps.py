@@ -69,8 +69,17 @@ def _register(ctx: RunContext, doc: DocumentText) -> None:
         ctx.headers[doc.doc_id] = parse_header(doc.pages[0].text if doc.pages else "")
 
 
+def resolve_doc_id(ctx: RunContext, ref: str) -> str | None:
+    """Accept a doc_id or a file name: small models often pass the name they saw in the inventory."""
+    if ref in ctx.documents:
+        return ref
+    return next((d.doc_id for d in ctx.documents.values() if d.file.name == ref), None)
+
+
 def ingest_all(ctx: RunContext) -> ToolResult:
     ctx.inventory = list_inputs(ctx.input_dir)
+    if ctx.only_paths is not None:
+        ctx.inventory = [f for f in ctx.inventory if f.path in ctx.only_paths]
     names = {f.path: f.name for f in ctx.inventory}
     todo = []
     for f in ctx.inventory:
@@ -108,6 +117,7 @@ def read_one(ctx: RunContext, file_name: str) -> ToolResult:
 
 
 def rerecognize(ctx: RunContext, doc_id: str, pages: list[int], strategy: str) -> ToolResult:
+    doc_id = resolve_doc_id(ctx, doc_id) or doc_id
     doc = ctx.documents.get(doc_id)
     if doc is None:
         return ToolResult(status="error", error_type="not_found", hint="Нет такого doc_id")
@@ -157,7 +167,8 @@ def _counts(record: DocumentRecord) -> dict:
 
 def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None = None) -> ToolResult:
     done, skipped = [], []
-    for doc_id in doc_ids:
+    for ref in doc_ids:
+        doc_id = resolve_doc_id(ctx, ref) or ref
         doc = ctx.documents.get(doc_id)
         if doc is None or (ctx.only_doc_ids is not None and doc_id not in ctx.only_doc_ids):
             skipped.append(doc_id)

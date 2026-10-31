@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -11,6 +12,36 @@ from contract_analyst.config import load_settings
 app = typer.Typer(no_args_is_help=True, help="Аналитик цепочек и кластеров договоров")
 golden_app = typer.Typer(no_args_is_help=True, help="Инструменты эталона")
 app.add_typer(golden_app, name="golden")
+
+
+@app.command()
+def analyze(data: Path,
+            as_of: Annotated[str | None, typer.Option(help="Дата свёртки YYYY-MM-DD, по умолчанию сегодня")] = None,
+            variant: Annotated[str | None, typer.Option(help="Оркестрация: A, B или C")] = None,
+            model: Annotated[str | None, typer.Option(help="Модель, например ollama:qwen3:8b")] = None,
+            chain: Annotated[str | None, typer.Option(help="Номер договора: разобрать только эту цепочку")] = None,
+            doc: Annotated[Path | None, typer.Option(help="Разобрать только этот файл")] = None,
+            llm_cache: Annotated[str | None, typer.Option(help="record | replay | off")] = None,
+            out: Annotated[Path, typer.Option(help="Папка для результатов")] = Path("runs")) -> None:
+    """Разобрать пакет документов и собрать отчёт."""
+    from datetime import date
+
+    from contract_analyst.agent.runner import run_analysis
+    from contract_analyst.llm.client import LLMUnavailable, ReplayMiss
+
+    overrides = {k: v for k, v in {"llm_model": model, "llm_cache_mode": llm_cache, "agent_variant": variant}.items() if v}
+    settings = load_settings(**overrides)
+    when = date.fromisoformat(as_of) if as_of else date.today()
+    try:
+        result = run_analysis(data, settings, when, settings.agent_variant, only_chain=chain, only_doc=doc, out_dir=out)
+    except LLMUnavailable as exc:
+        typer.echo(exc.hint)
+        raise typer.Exit(2) from None
+    except ReplayMiss as exc:
+        typer.echo(f"Нет записанного ответа модели для этого запуска (режим replay): {exc}")
+        raise typer.Exit(2) from None
+    typer.echo(f"Отчёт: {result.report_path}\nБаза знаний: {result.kb_dir}\nТрасса: {result.trace_path}\n"
+               f"Время: {result.seconds} с; вызовов LLM: {result.llm_usage.get('calls', 0)}")
 
 
 def _read_all(data: Path, cache: Path | None = None):
