@@ -93,8 +93,34 @@ def _doc_dates(doc: DocumentText) -> set[date]:
     return {d for p in doc.pages for d, _ in find_dates(p.text)}
 
 
+def _reanchor(row: RateOut, amount, doc: DocumentText) -> tuple[int, str] | None:
+    """Find a line that carries both the rate label and its amount — table rows often get quoted without the number."""
+    import re
+
+    from contract_analyst.ingest.normalize import normalize_text
+    from contract_analyst.parsing.patterns import find_numbers
+
+    def words(text: str) -> set[str]:
+        return set(re.findall(r"[0-9a-zа-яё]+", normalize_text(text).casefold()))
+
+    label = words(row.label)
+    pages = [doc.pages[row.page - 1]] if 1 <= row.page <= len(doc.pages) else []
+    pages += [p for p in doc.pages if p.number != row.page]
+    for page in pages:
+        for line in page.text.split("\n"):
+            if amount in find_numbers(line) and label and label <= words(line):
+                return page.number, line.strip()
+    return None
+
+
 def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
     amount = parse_money(row.amount)
+    reanchored = False
+    if amount is not None and not check_value_in_quote(str(amount), row.quote, "money").ok:
+        found = _reanchor(row, amount, doc)
+        if found:
+            row = row.model_copy(update={"page": found[0], "quote": found[1]})
+            reanchored = True
     valid_from, valid_to = _iso(row.valid_from), _iso(row.valid_to)
     base = {"label": row.label, "amount": amount if amount is not None else 0, "vat": row.vat,
                 "valid_from": valid_from if isinstance(valid_from, date) else None,
@@ -117,7 +143,7 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
         if not check.ok:
             status = ValueStatus.REDACTED if check.code == "redacted" else ValueStatus.REJECTED
             return RateRow(**base, status=status, reason=_reason(check))
-    return RateRow(**base, status=ValueStatus.ACCEPTED)
+    return RateRow(**base, status=ValueStatus.ACCEPTED, reason="quote_reanchored" if reanchored else None)
 
 
 def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:

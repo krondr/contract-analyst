@@ -82,3 +82,14 @@ def test_ingest_lists_duplicates_and_unsupported(tmp_path, fixtures_package):
     duplicates = [f for f in ("ДС1.pdf", "ДС1 (копия).pdf") if "дубликат" in reasons.get(f, "")]
     assert len(duplicates) == 1 and reasons["t.xlsx"] == "unsupported_format"
     assert len(ctx.documents) == 3 and set(ctx.headers) == set(ctx.documents)
+
+
+def test_analyze_resolves_document_number_and_file_stem(ctx, monkeypatch):
+    import contract_analyst.agent.steps as steps_module
+    from tests.fixtures.builders import make_record
+
+    monkeypatch.setattr(steps_module, "understand_document",
+                        lambda doc, header, client, settings, groups=None: make_record(doc.doc_id, header.number, kind="main"))
+    ingest_all(ctx)
+    assert dispatch(ctx, call("analyze_document", doc_id="D990000002-01"), Guard(10, 60)).data["analyzed"]
+    assert dispatch(ctx, call("analyze_document", doc_id="Договор аренды"), Guard(10, 60)).data["analyzed"]

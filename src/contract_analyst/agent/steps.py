@@ -78,7 +78,13 @@ def resolve_doc_id(ctx: RunContext, ref: str) -> str | None:
     """Accept a doc_id or a file name: small models often pass the name they saw in the inventory."""
     if ref in ctx.documents:
         return ref
-    return next((d.doc_id for d in ctx.documents.values() if d.file.name == ref), None)
+    for d in ctx.documents.values():
+        header = ctx.headers.get(d.doc_id)
+        record = ctx.records.get(d.doc_id)
+        if ref in (d.file.name, d.file.name.rsplit(".", 1)[0]) or (header and header.number == ref) or (
+                record and record.number.value == ref):
+            return d.doc_id
+    return None
 
 
 def ingest_all(ctx: RunContext) -> ToolResult:

@@ -86,3 +86,13 @@ def test_gate_op_invalidation_target_must_be_quoted(doc):
     quote = "Соглашение № D990000003-01 от 14.02.2024 считать недействительным"
     assert gate_op(OpOut(op="invalidate_document", target="D990000003-01", page=1, quote=quote), doc, s).status == "accepted"
     assert gate_op(OpOut(op="invalidate_document", target="D990000009-01", page=1, quote=quote), doc, s).status == "rejected"
+
+
+def test_rate_quote_reanchored_to_the_line_with_label_and_amount(doc):
+    row = gate_rate(RateOut(label="Тариф А", amount="700", page=1, quote="Тариф А"), doc, load_settings())
+    assert row.status == "accepted" and "700" in row.source.quote and row.reason == "quote_reanchored"
+
+
+def test_rate_not_reanchored_when_no_line_has_both(doc):
+    row = gate_rate(RateOut(label="Тариф Б", amount="700", page=1, quote="Тариф Б"), doc, load_settings())
+    assert row.status == "rejected"
