@@ -94,3 +94,15 @@ class FakeOcrEngine:
     def recognize(self, image: np.ndarray) -> OcrResult:
         words = [OcrWord(text=w, conf=self.conf) for w in self.text.split()]
         return OcrResult(text=self.text, words=words, mean_conf=self.conf, rotation=0)
+
+
+def text_doc(pages: list[str], doc_id: str = "doc000000001", name: str = "mem.pdf"):
+    """In-memory DocumentText made of text-layer pages."""
+    from contract_analyst.ingest.normalize import normalize_text
+    from contract_analyst.ingest.segment import segment_clauses
+    from contract_analyst.models import DocFormat, DocumentText, InputFile, Page, PageQuality
+
+    built = [Page(number=i, method="text", text=normalize_text(t), quality=PageQuality(chars=len(t)))
+             for i, t in enumerate(pages, start=1)]
+    file = InputFile(path=name, name=name, sha256=doc_id.ljust(64, "0"), format=DocFormat.PDF, size_bytes=0)
+    return DocumentText(doc_id=doc_id, file=file, pages=built, clauses=segment_clauses(built), status="ok")
