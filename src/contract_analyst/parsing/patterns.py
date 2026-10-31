@@ -15,7 +15,7 @@ RU_MONTHS = {
 _MONTH_ALT = r"январ[яь]|феврал[яь]|марта?|апрел[яь]|ма[яй]|июн[яь]|июл[яь]|августа?|сентябр[яь]|октябр[яь]|ноябр[яь]|декабр[яь]"
 _TEXT_DATE_RE = re.compile(rf"«?\s*(\d{{1,2}})\s*»?\s+({_MONTH_ALT})\s+(\d{{4}})", re.IGNORECASE)
 _NUM_DATE_RE = re.compile(r"(?<!\d)(\d{1,2})\.(\d{1,2})\.(\d{4})(?!\d)")
-_MONEY_RE = re.compile(r"(?<![\d.,])\d{1,3}(?:[  ]\d{3})+(?:[.,]\d+)?|(?<![\d.,])\d+(?:[.,]\d+)?")
+_MONEY_RE = re.compile(r"(?<![\d.,])\d{1,3}(?:[  ]\d{3})+(?!\d)(?:[.,]\d+)?|(?<![\d.,])\d+(?:[.,]\d+)?")
 
 
 def _month_number(word: str) -> int | None:
@@ -65,9 +65,18 @@ def _to_decimal(raw: str) -> Decimal | None:
 
 
 def find_numbers(text: str) -> list[Decimal]:
-    """All amount-like numbers in order; dates are removed first so their parts are not counted."""
+    """All amount-like numbers in order; dates are removed first so their parts are not counted.
+
+    "270 500" is ambiguous: one amount with a thousands separator or two table cells. Both readings are kept,
+    the grouped one first, so parse_money("1 500") is still 1500.
+    """
     without_dates = _NUM_DATE_RE.sub(" ", text)
-    return [n for n in (_to_decimal(m.group(0)) for m in _MONEY_RE.finditer(without_dates)) if n is not None]
+    found: list[Decimal] = []
+    for m in _MONEY_RE.finditer(without_dates):
+        raw = m.group(0)
+        readings = [raw] + (raw.replace("\u00a0", " ").split(" ") if re.search(r"[ \u00a0]", raw) else [])
+        found.extend(n for n in (_to_decimal(r) for r in readings) if n is not None)
+    return found
 
 
 def parse_money(s: str) -> Decimal | None:

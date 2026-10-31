@@ -3,7 +3,13 @@ from decimal import Decimal
 
 import pytest
 
-from contract_analyst.parsing.patterns import find_dates, find_doc_numbers, parse_money, parse_ru_date
+from contract_analyst.parsing.patterns import (
+    find_dates,
+    find_doc_numbers,
+    find_numbers,
+    parse_money,
+    parse_ru_date,
+)
 
 
 @pytest.mark.parametrize("s,expected", [
@@ -32,3 +38,10 @@ def test_parse_money_ru_format():
     assert parse_money("1 500") == Decimal(1500)
     assert parse_money("3000 (три тысячи) рублей") == Decimal(3000)
     assert parse_money("нет суммы") is None
+
+
+def test_find_numbers_keeps_both_readings_of_space_separated_table_cells():
+    found = find_numbers("Тариф Старт 270 500")
+    assert Decimal(270) in found and Decimal(500) in found and Decimal(270500) in found
+    assert find_numbers("Пакет Мини 675 1000") == [Decimal(675), Decimal(1000)]
+    assert parse_money("1 500 рублей") == Decimal(1500)
