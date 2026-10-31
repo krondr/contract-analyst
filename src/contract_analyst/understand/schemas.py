@@ -65,3 +65,4 @@ class OpOut(BaseModel):
 
 class OpsOut(BaseModel):
     ops: list[OpOut] = []
+    effective_from: ValueOut = ValueOut()  # when the document itself takes effect

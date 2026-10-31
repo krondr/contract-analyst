@@ -6,7 +6,7 @@ import re
 
 from contract_analyst.models import Clause, Page
 
-_CLAUSE_RE = re.compile(r"^\s*(\d{1,2}(?:\.\d{1,2}){1,3}|\d{1,2}(?=\.))\.?\s+\S")
+_CLAUSE_RE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3}){1,3}|\d{1,3}(?=\.))\.?\s+\S")
 _APPENDIX_RE = re.compile(r"^\s*Приложение\s*№\s*(\d+)", re.IGNORECASE)
 
 

@@ -1,0 +1,18 @@
+[
+  {"structured": {"kind": "supplement", "title": "Дополнительное соглашение № D990000002-01",
+    "number": {"value": "D990000002-01", "page": 1, "quote": "Дополнительное соглашение № D990000002-01"},
+    "doc_date": {"value": null}, "city": {"value": null},
+    "parent_number": {"value": "D990000001-01", "page": 1, "quote": "к Договору № D990000001-01 от «21» января 2021 г."},
+    "parent_date": {"value": "2021-01-21", "page": 1, "quote": "к Договору № D990000001-01 от «21» января 2021 г."},
+    "effective_from": {"value": "2026-07-01", "page": 1, "quote": "вступает в силу с 01.07.2026"},
+    "parties": [], "subject_category": "commercial_representation"}},
+  {"structured": {"rates": [
+    {"label": "Ставка вознаграждения", "amount": "700", "vat": "excluded", "page": 1,
+     "quote": "Ставка вознаграждения составляет 700 рублей без НДС"},
+    {"label": "Ставка вознаграждения", "amount": "900", "vat": "excluded", "page": 1,
+     "quote": "Ставка вознаграждения составляет 900 рублей без НДС"}]}},
+  {"structured": {"ops": [
+    {"op": "replace_clause", "target": "3.1", "new_text_excerpt": "Ставка вознаграждения составляет 700 рублей без НДС",
+     "page": 1, "quote": "Изложить п. 3.1 Договора в следующей редакции"}],
+    "effective_from": {"value": "2026-07-01", "page": 1, "quote": "Настоящее Соглашение вступает в силу с 01.07.2026"}}}
+]
