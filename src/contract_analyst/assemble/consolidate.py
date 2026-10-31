@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from contract_analyst.labels import TERM_RU
 from contract_analyst.models import (
     ChainDoc,
     ConsolidatedContract,
@@ -43,7 +44,7 @@ def _summary(rec: DocumentRecord, doc: ChainDoc) -> str:
         return "основной договор"
     parts = [f"{_OP_LABELS[op.op]}{f' {op.target}' if op.target else ''}" for op in rec.ops
              if op.status == ValueStatus.ACCEPTED]
-    changed = [k for k, v in rec.terms.items() if v.status == ValueStatus.ACCEPTED]
+    changed = [TERM_RU.get(k, k).lower() for k, v in rec.terms.items() if v.status == ValueStatus.ACCEPTED]
     if rec.rates:
         changed.append("ставки")
     if changed:

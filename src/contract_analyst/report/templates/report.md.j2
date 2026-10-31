@@ -1,0 +1,162 @@
+# Отчёт по пакету договоров
+
+## 1. Сводка запуска
+
+- Запуск: `{{ ctx.run_id }}`
+- Условия рассчитаны на дату: **{{ ctx.as_of }}**
+- Модель: `{{ ctx.model }}`; OCR: `{{ ctx.ocr }}`; версии промптов: {% for name, v in ctx.prompt_versions.items() %}{{ name }} v{{ v }}{{ ", " if not loop.last }}{% endfor %}
+
+- Документов: {{ ctx.documents | length }}; не обработано: {{ ctx.unprocessed | length }}; цепочек: {{ ctx.chains | length }}; кластеров: {{ ctx.clusters | length }}
+
+## 2. Опись документов
+
+| Файл | Вид | Номер | Дата | Родитель | Чтение | Качество |
+|---|---|---|---|---|---|---|
+{% for d in documents %}
+{% set r = ctx.records.get(d.doc_id) %}
+{% set methods = d.pages | map(attribute="method") | map(attribute="value") | list %}
+| {{ cell(d.file.name) }} | {{ KIND_RU[r.kind.value] if r and r.kind.value else "—" }} | {{ value(r.number) if r else "—" }} {{ ref(r.number.source) if r and r.number.status == "accepted" else "" }} | {{ value(r.doc_date) if r else "—" }} | {{ r.parent.value.number if r and r.parent.value else "—" }} | {% for m in ["text", "ocr", "empty"] if m in methods %}{{ m }}: {{ methods.count(m) }}{{ ", " if not loop.last }}{% endfor %} | {{ d.status }} |
+{% endfor %}
+
+## 3. Кластеры
+
+{% for c in ctx.clusters %}
+### {{ c.label }}
+
+| Договор | Тип контрагента | Город | Модель вознаграждения | Статус | Год |
+|---|---|---|---|---|---|
+{% for m in c.members %}
+{% set f = c.facets.get(m, {}) %}
+| {{ m }} | {{ f.get("counterparty_type", "—") }} | {{ f.get("city", "—") }} | {{ f.get("remuneration_model", "—") }} | {{ f.get("status", "—") }} | {{ f.get("year", "—") }} |
+{% endfor %}
+
+{% if c.differences %}
+#### Различия внутри кластера
+
+| Условие | {% for m in c.members %}{{ m }} | {% endfor %}
+
+|---|{% for m in c.members %}---|{% endfor %}
+
+{% for diff in c.differences %}
+| {{ TERM_RU.get(diff.term, diff.term) }} | {% for m in c.members %}{{ cell(diff.values.get(m, "—")) }} | {% endfor %}
+
+{% endfor %}
+{% else %}
+Различий между договорами кластера нет или договор в кластере один.
+{% endif %}
+
+{% if c.summary %}
+<!-- llm -->{{ c.summary }}<!-- /llm -->
+{% endif %}
+
+{% endfor %}
+## 4. Договоры
+
+{% for chain in chains %}
+{% set cc = ctx.consolidated.get(chain.contract_number) %}
+### {{ chain.contract_number }}
+
+{% if cc %}
+Статус на {{ cc.as_of }}: **{{ STATUS_RU.get(cc.status, cc.status) }}**{% if cc.status_since %} (с {{ cc.status_since }}){% endif %}.
+{% endif %}
+{% if chain.main_date and chain.main_date.value %}
+Дата основного договора: {{ chain.main_date.value }} ({{ chain.main_date.status.value }}) {{ ref(chain.main_date.source) }}
+{% endif %}
+
+#### Цепочка документов
+
+| # | Документ | Номер | Действует с | Что делает | Отметка |
+|---|---|---|---|---|---|
+{% for e in (cc.timeline if cc else []) %}
+| {{ loop.index }} | {{ cell(docs_by_id[e.doc_id].file.name if e.doc_id in docs_by_id else e.doc_id) }} | {{ e.number or "—" }} | {{ e.when or "—" }} | {{ cell(e.summary) }} | {{ "отменён" if e.invalidated else "" }} |
+{% endfor %}
+
+#### Эволюция условий
+
+{% set ns = namespace(any=false) %}
+{% for name, st in (cc.terms.items() if cc else []) %}
+{% if st.history or st.planned %}
+{% set ns.any = true %}
+- **{{ TERM_RU.get(name, name) }}**: {% for h in st.history %}{{ cell(h.value) }} {{ ref(h.source) }} → {% endfor %}{{ cell(value(st.current)) }} {{ ref(st.current.source) }}{% for p in st.planned %}; запланировано с {{ p.effective_from }}: {{ cell(p.value) }} {{ ref(p.source) }}{% endfor %}
+
+{% endif %}
+{% endfor %}
+{% for label, steps in rate_history.get(chain.contract_number, {}).items() %}
+{% set ns.any = true %}
+- **Ставка «{{ cell(label) }}»**: {{ steps | join(" → ") }}
+{% endfor %}
+{% for r in (cc.planned_rates if cc else []) %}
+{% set ns.any = true %}
+- **Ставка «{{ r.label }}»**: с {{ r.valid_from }} будет {{ money(r.amount) }} руб. {{ VAT_RU[r.vat] }} {{ ref(r.source) }}
+{% endfor %}
+{% if not ns.any %}
+Изменений условий по цепочке не найдено.
+{% endif %}
+
+#### Действующие условия на {{ cc.as_of if cc else ctx.as_of }}
+
+| Условие | Значение | Источник |
+|---|---|---|
+{% for name, st in (cc.terms.items() if cc else []) if st.current.status == "accepted" %}
+| {{ TERM_RU.get(name, name) }} | {{ cell(st.current.value) }} | {{ ref(st.current.source) }} |
+{% endfor %}
+{% for r in (cc.rates if cc else []) %}
+| Ставка «{{ cell(r.label) }}» | {{ money(r.amount) }} руб. {{ VAT_RU[r.vat] }}{% if r.valid_from %} с {{ r.valid_from }}{% endif %}{% if r.valid_to %} по {{ r.valid_to }}{% endif %} | {{ ref(r.source) }} |
+{% endfor %}
+
+{% set issues = chain.issues + (cc.issues if cc else []) %}
+{% if issues %}
+Замечания:
+{% for i in issues %}
+- `{{ i.code }}` — {{ cell(i.message) }}{% for s in i.sources %} {{ ref(s) }}{% endfor %}
+
+{% endfor %}
+{% endif %}
+
+{% endfor %}
+## 5. Отказы и противоречия
+
+{% if refusals %}
+| Документ | Поле | Значение | Статус | Причина | Источник |
+|---|---|---|---|---|---|
+{% for row in refusals %}
+| {{ cell(row.file) }} | {{ row.field }} | {{ cell(row.value) }} | {{ row.status }} | {{ cell(row.reason) }} | {{ row.ref }} |
+{% endfor %}
+{% else %}
+Отказов нет.
+{% endif %}
+
+{% if ctx.decisions %}
+Решения агента по противоречиям:
+
+| Проблема | Договор | Решение | Обоснование |
+|---|---|---|---|
+{% for d in ctx.decisions %}
+| `{{ d.issue_code }}` | {{ d.contract_number or "—" }} | {{ cell(d.decision) }} | {{ cell(d.rationale) }} |
+{% endfor %}
+{% endif %}
+
+## 6. Не обработано
+
+{% if ctx.unprocessed %}
+| Файл | Причина |
+|---|---|
+{% for u in ctx.unprocessed %}
+| {{ cell(u.file) }} | {{ cell(u.reason) }} |
+{% endfor %}
+{% else %}
+Все файлы обработаны.
+{% endif %}
+
+## 7. Reflection
+
+| Пункт плана | Выполнено | Комментарий |
+|---|---|---|
+{% for item in ctx.reflection %}
+| {{ cell(item.item) }} | {{ "✅" if item.ok else "❌" }} | {{ cell(item.note) }} |
+{% endfor %}
+
+## 8. Трасса и метрики
+
+- Трасса шагов агента: `{{ ctx.trace_path }}`
+- Метрики запуска: `{{ ctx.metrics_path or "—" }}`
