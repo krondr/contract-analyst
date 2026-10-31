@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from datetime import date
 from pathlib import Path
@@ -106,6 +107,50 @@ def experiment_specs(name: str, models: list[str] | None = None, variants: list[
     raise ValueError(f"unknown experiment {name}")
 
 
+_SIZE = re.compile(r"(\d+(?:\.\d+)?)b", re.IGNORECASE)
+
+RULES = {
+    "e2": ("Выбор LLM", ("1) отбрасываются модели с неверными принятыми критичными значениями, если есть модель без них; "
+           "2) максимум доли принятых верных (ничья — разница ≤ 0,02); 3) доля валидных JSON и вызовов инструментов; "
+           "4) меньше время; 5) при ничьей — модель меньше.")),
+    "e3": ("Свёртка кодом или LLM", ("побеждает code, если LLM не лучше по точности свёртки больше чем на один договор "
+           "(0,2 при пяти договорах); при ничьей — code (прослеживаемость).")),
+    "e4": ("Оркестрация", ("среди агентных вариантов B и C — больше пройденных ловушек, затем выше точность свёртки; "
+           "при ничьей — B. Конвейер A и один вызов S — точки отсчёта, в финал не идут.")),
+}
+
+
+def _model_size(name: str) -> float:
+    m = _SIZE.search(name)
+    return float(m.group(1)) if m else float("inf")
+
+
+def select_e2_winner(results: list[VariantResult]) -> VariantResult:
+    pool = [r for r in results if r.scores.critical_accepted_wrong == 0] or list(results)
+    best = max(r.scores.critical_coverage for r in pool)
+    pool = [r for r in pool if best - r.scores.critical_coverage <= 0.02]
+    validity = max(r.scores.json_valid_rate + r.scores.tool_call_valid_rate for r in pool)
+    pool = [r for r in pool if validity - (r.scores.json_valid_rate + r.scores.tool_call_valid_rate) <= 0.01]
+    return min(pool, key=lambda r: (r.scores.wall_seconds, _model_size(r.spec.name)))
+
+
+def select_e3_winner(results: list[VariantResult], contracts: int = 5) -> VariantResult:
+    by_name = {r.spec.name: r for r in results}
+    code, llm = by_name.get("code"), by_name.get("llm")
+    if code is None or llm is None:
+        return code or llm
+    margin = 1 / contracts
+    return llm if llm.scores.consolidation_acc - code.scores.consolidation_acc > margin else code
+
+
+def select_e4_winner(results: list[VariantResult]) -> VariantResult:
+    agents = [r for r in results if r.spec.variant in ("B", "C")]
+    return max(agents, key=lambda r: (r.scores.traps_passed, round(r.scores.consolidation_acc, 4),
+                                      r.spec.variant == "B"))
+
+
 def decide(name: str, results: list[VariantResult]) -> tuple[str, str, str]:
-    """Title, pre-registered rule and winner for an experiment. Rules arrive with E2–E4."""
-    raise NotImplementedError(f"selection rule for {name} is defined in its experiment task")
+    """Title, pre-registered rule and winner for an experiment."""
+    title, rule = RULES[name]
+    select = {"e2": select_e2_winner, "e3": select_e3_winner, "e4": select_e4_winner}[name]
+    return title, rule, select(results).spec.name
