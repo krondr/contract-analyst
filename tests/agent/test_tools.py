@@ -105,3 +105,12 @@ def test_missing_thought_falls_back_to_message_text_and_is_flagged(ctx):
     thoughts = [e for e in read_trace(ctx.trace.path) if e["event"] == "thought"]
     assert thoughts[0]["thought"] == "смотрю опись" and thoughts[0]["thought_source"] == "message"
     assert thoughts[1]["thought_source"] == "missing"
+
+
+def test_missing_thought_falls_back_to_model_reasoning(ctx):
+    guard = Guard(10, 60)
+    dispatch(ctx, ToolCall(id="1", name="list_inputs", args={}), guard, reasoning="Сначала смотрю опись файлов.")
+    dispatch(ctx, ToolCall(id="2", name="build_chains", args={}), guard, reasoning="а" * 1000 + " Собираю цепочки.")
+    thoughts = [e for e in read_trace(ctx.trace.path) if e["event"] == "thought"]
+    assert thoughts[0]["thought"] == "Сначала смотрю опись файлов." and thoughts[0]["thought_source"] == "reasoning"
+    assert thoughts[1]["thought"].endswith("Собираю цепочки.") and len(thoughts[1]["thought"]) <= 601

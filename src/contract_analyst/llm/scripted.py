@@ -28,8 +28,8 @@ class ScriptedClient:
         self.usage["calls"] += 1
         return self._script.pop(0)
 
-    def chat(self, messages: list[Message], tools: list[dict] | None = None) -> AssistantTurn:
-        self.calls.append({"kind": "chat", "messages": messages, "tools": tools})
+    def chat(self, messages: list[Message], tools: list[dict] | None = None, think: bool = False) -> AssistantTurn:
+        self.calls.append({"kind": "chat", "messages": messages, "tools": tools, "think": think})
         item = self._next()
         return AssistantTurn(content=item) if isinstance(item, str) else item
 

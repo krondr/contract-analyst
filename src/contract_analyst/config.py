@@ -31,6 +31,7 @@ class Settings(BaseModel):
     max_steps: int = 60
     max_seconds: int = 1800
     max_reflection_rounds: int = 2
+    agent_thinking: bool = True
     subject_categories: dict[str, str] = {}
     field_groups: dict[str, list[str]] = {}
     field_descriptions: dict[str, str] = {}

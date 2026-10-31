@@ -84,3 +84,33 @@ def test_factory_builds_cached_ollama_client(tmp_path):
     client = get_llm_client(load_settings(llm_model="ollama:qwen3:8b", llm_cache_mode="replay"), tmp_path / "c.sqlite")
     assert isinstance(client, CachingClient) and client.model_name == "qwen3:8b"
     client.check_available()  # replay mode never needs a live server
+
+
+def test_thinking_turns_are_cached_apart_and_keep_reasoning(tmp_path):
+    db = tmp_path / "c.sqlite"
+    plain, thinking = AssistantTurn(content="a"), AssistantTurn(content="b", reasoning="думаю")
+    rec = CachingClient(ScriptedClient([plain, thinking]), db, "record")
+    rec.chat(M)
+    rec.chat(M, think=True)
+    replay = CachingClient(ScriptedClient([]), db, "replay")
+    assert replay.chat(M) == plain and replay.chat(M, think=True).reasoning == "думаю"
+
+
+def test_ollama_chat_with_thinking_returns_reasoning(monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    from contract_analyst.llm.ollama_client import OllamaClient
+
+    class FakeLLM:
+        def bind_tools(self, tools):
+            return self
+
+        def invoke(self, messages):
+            return AIMessage("", additional_kwargs={"reasoning_content": "думаю"},
+                             tool_calls=[{"name": "list_inputs", "args": {}, "id": "1"}])
+
+    client = OllamaClient("qwen3:8b")
+    assert client._get(think=True).reasoning is True and client._get().reasoning is False
+    monkeypatch.setattr(client, "_get", lambda think=False: FakeLLM())
+    turn = client.chat(M, tools=[{"name": "list_inputs"}], think=True)
+    assert turn.reasoning == "думаю" and turn.tool_calls[0].name == "list_inputs"

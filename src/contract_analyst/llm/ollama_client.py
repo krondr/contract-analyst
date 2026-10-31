@@ -1,4 +1,4 @@
-"""Local Ollama client (langchain-ollama), temperature 0, Qwen3 thinking disabled."""
+"""Local Ollama client (langchain-ollama), temperature 0; Qwen3 thinking only when a caller asks for it."""
 
 from __future__ import annotations
 
@@ -36,15 +36,16 @@ class OllamaClient:
                  timeout: float = 600.0):
         self.model_name, self.base_url, self.num_ctx, self.timeout = model, base_url, num_ctx, timeout
         self.usage = new_usage()
-        self._llm = None
+        self._llms: dict[bool, object] = {}
 
-    def _get(self):
-        if self._llm is None:
+    def _get(self, think: bool = False):
+        if think not in self._llms:
             from langchain_ollama import ChatOllama
 
-            self._llm = ChatOllama(model=self.model_name, base_url=self.base_url, temperature=0,
-                                   num_ctx=self.num_ctx, reasoning=False, client_kwargs={"timeout": self.timeout})
-        return self._llm
+            self._llms[think] = ChatOllama(model=self.model_name, base_url=self.base_url, temperature=0,
+                                           num_ctx=self.num_ctx, reasoning=think,
+                                           client_kwargs={"timeout": self.timeout})
+        return self._llms[think]
 
     def check_available(self) -> None:
         try:
@@ -62,13 +63,14 @@ class OllamaClient:
         self.usage["input_tokens"] += meta.get("input_tokens", 0)
         self.usage["output_tokens"] += meta.get("output_tokens", 0)
 
-    def chat(self, messages: list[Message], tools: list[dict] | None = None) -> AssistantTurn:
-        llm = self._get()
+    def chat(self, messages: list[Message], tools: list[dict] | None = None, think: bool = False) -> AssistantTurn:
+        llm = self._get(think)
         ai = (llm.bind_tools(tools) if tools else llm).invoke(_to_langchain(messages))
         self._account(ai)
         calls = [ToolCall(id=c.get("id") or f"call_{i}", name=c["name"], args=c.get("args") or {})
                  for i, c in enumerate(ai.tool_calls)]
-        return AssistantTurn(content=_text(ai.content), tool_calls=calls)
+        return AssistantTurn(content=_text(ai.content), tool_calls=calls,
+                             reasoning=ai.additional_kwargs.get("reasoning_content") or "")
 
     def structured(self, messages: list[Message], schema: type[BaseModel]) -> str:
         ai = self._get().bind(format=schema.model_json_schema()).invoke(_to_langchain(messages))

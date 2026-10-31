@@ -91,3 +91,17 @@ def test_only_chain_limits_analysis(tmp_path, fixtures_package):
     r = run(package, script, tmp_path, only_chain=MAIN)
     result = next(e for e in read_trace(r.trace_path) if e["event"] == "tool_result" and e["tool"] == "analyze_document")
     assert "skipped" in result["data"] and "Другой" not in r.report_path.read_text(encoding="utf-8").split("## 4.")[1]
+
+
+def test_executor_thinks_and_its_reasoning_becomes_the_thought(tmp_path, fixtures_package):
+    turn = AssistantTurn(reasoning="Сначала соберу цепочки.", tool_calls=[ToolCall(id="0", name="build_chains", args={})])
+    reflect = '{"goal_met": true, "gaps": []}'
+    client = ScriptedClient(['{"items": ["План"]}', turn, chat(content="Готово"), reflect, chat(content="Готово"),
+                             reflect, '{"summary": "Аренда."}'])
+    r = run_analysis(fixtures_package, load_settings(agent_thinking=True), date(2026, 10, 30), client=client,
+                     ocr_engine=FakeOcrEngine(), out_dir=tmp_path, read_cache=None)
+    assert all(c["think"] for c in client.calls if c["kind"] == "chat")
+    trace = read_trace(r.trace_path)
+    assert any(e["event"] == "llm_call" and e.get("reasoning") == "Сначала соберу цепочки." for e in trace)
+    call = next(e for e in trace if e["event"] == "tool_call")
+    assert call["thought"] == "Сначала соберу цепочки." and call["thought_source"] == "reasoning"

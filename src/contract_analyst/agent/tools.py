@@ -116,15 +116,25 @@ def tool_schemas(names: list[str] | None = None) -> list[dict]:
 _THOUGHT_PREFIX = re.compile(r"^\s*(?:мысль|thought)\s*[:\-—]\s*", re.IGNORECASE)
 
 
-def _thought(args: ThoughtArgs, message_text: str) -> tuple[str, str]:
-    """The model's own words: the thought argument, else the text it wrote next to the calls."""
+_REASONING_TAIL = 600
+
+
+def _thought(args: ThoughtArgs, message_text: str, reasoning: str = "") -> tuple[str, str]:
+    """The model's own words: the thought argument, else the text it wrote next to the calls, else the end of its
+    thinking, where it settles on the calls (the whole thinking is in the executor's llm_call event)."""
     if args.thought.strip():
         return args.thought.strip(), "argument"
     text = _THOUGHT_PREFIX.sub("", message_text.strip())
-    return (text[:500], "message") if text else ("", "missing")
+    if text:
+        return text[:500], "message"
+    reasoning = reasoning.strip()
+    if reasoning:
+        return (reasoning if len(reasoning) <= _REASONING_TAIL else "…" + reasoning[-_REASONING_TAIL:]), "reasoning"
+    return "", "missing"
 
 
-def dispatch(ctx: RunContext, call: ToolCall, guard: Guard, node: str = "tools", message_text: str = "") -> ToolResult:
+def dispatch(ctx: RunContext, call: ToolCall, guard: Guard, node: str = "tools", message_text: str = "",
+             reasoning: str = "") -> ToolResult:
     spec = TOOLS.get(call.name)
     if spec is None:
         result = ToolResult(status="error", error_type="unknown_tool", hint=f"Нет инструмента {call.name}")
@@ -138,7 +148,7 @@ def dispatch(ctx: RunContext, call: ToolCall, guard: Guard, node: str = "tools",
     except ValidationError as exc:
         ctx.trace.event("error", node, tool=call.name, message="bad arguments")
         return ToolResult(status="error", error_type="bad_args", hint=f"Неверные аргументы: {str(exc)[:300]}")
-    thought, source = _thought(args, message_text)
+    thought, source = _thought(args, message_text, reasoning)
     ctx.trace.event("thought", node, tool=call.name, thought=thought, thought_source=source)
     key = (call.name, json.dumps(args.model_dump(exclude={"thought"}), sort_keys=True, default=str))
     guard.steps += 1

@@ -18,6 +18,7 @@ consolidation_mode: code               # E3: code | llm
 max_steps: 60
 max_seconds: 1800
 max_reflection_rounds: 2
+agent_thinking: true                   # Qwen3 thinking for the executor; it is logged as the agent's thoughts
 
 subject_categories:
   commercial_representation: "Коммерческое представительство"

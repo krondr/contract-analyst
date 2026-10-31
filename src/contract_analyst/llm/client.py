@@ -18,6 +18,7 @@ class ToolCall(BaseModel):
 class AssistantTurn(BaseModel):
     content: str = ""
     tool_calls: list[ToolCall] = []
+    reasoning: str = ""  # the model's thinking, when asked for it
 
 
 class LLMUnavailable(RuntimeError):
@@ -38,6 +39,6 @@ class LLMClient(Protocol):
     model_name: str
     usage: dict[str, int]
 
-    def chat(self, messages: list[Message], tools: list[dict] | None = None) -> AssistantTurn: ...
+    def chat(self, messages: list[Message], tools: list[dict] | None = None, think: bool = False) -> AssistantTurn: ...
 
     def structured(self, messages: list[Message], schema: type[BaseModel]) -> str: ...

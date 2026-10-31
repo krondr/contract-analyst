@@ -26,7 +26,7 @@ class FaultyClient:
         self.fault, self.usage = structured_fault, new_usage()
         self.turns = list(chat_script or [])
 
-    def chat(self, messages, tools=None):
+    def chat(self, messages, tools=None, think=False):
         self.usage["calls"] += 1
         return self.turns.pop(0) if self.turns else AssistantTurn(content="Готово")
 

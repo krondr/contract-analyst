@@ -19,6 +19,7 @@ class TraceLogger:
         self.run_id = run_id
         self._console = Console(stderr=True) if console else None
         self._lock = threading.Lock()
+        self._last_echo = None
 
     def event(self, kind: str, node: str, **payload) -> None:
         record = {"ts": datetime.now().isoformat(timespec="seconds"), "run_id": self.run_id, "node": node,
@@ -29,7 +30,10 @@ class TraceLogger:
         if self._console and kind in _LIVE:
             text = payload.get("thought") or payload.get("message") or payload.get("items") or payload.get("summary") or ""
             tool = f" → {payload['tool']}" if "tool" in payload else ""
-            self._console.print(f"[bold]{_LIVE[kind]}[/bold]{tool}: {text}", highlight=False)
+            # One thinking covers a whole batch of calls: print it once, then only the calls.
+            shown = "(та же)" if text and (kind, text) == self._last_echo else text
+            self._last_echo = (kind, text)
+            self._console.print(f"[bold]{_LIVE[kind]}[/bold]{tool}: {shown}", highlight=False)
 
 
 def read_trace(path: Path) -> list[dict]:

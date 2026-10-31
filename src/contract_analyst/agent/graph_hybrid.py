@@ -85,13 +85,14 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
 
     def executor(state: AgentState) -> dict:
         try:
-            turn = ctx.client.chat(state["messages"], tool_schemas())
+            turn = ctx.client.chat(state["messages"], tool_schemas(), think=ctx.settings.agent_thinking)
         except (TimeoutError, httpx.TimeoutException) as exc:
             ctx.trace.event("error", "executor", message=f"LLM timeout: {exc}")
             return {"messages": [{"role": "assistant", "content": "", "tool_calls": []}]}
-        ctx.trace.event("llm_call", "executor", content=turn.content[:300], tool_calls=[c.name for c in turn.tool_calls])
-        return {"messages": [{"role": "assistant", "content": turn.content,
-                              "tool_calls": [c.model_dump() for c in turn.tool_calls]}]}
+        ctx.trace.event("llm_call", "executor", content=turn.content[:300], reasoning=turn.reasoning,
+                        tool_calls=[c.name for c in turn.tool_calls])
+        message = {"role": "assistant", "content": turn.content, "tool_calls": [c.model_dump() for c in turn.tool_calls]}
+        return {"messages": [message | ({"reasoning": turn.reasoning} if turn.reasoning else {})]}
 
     def after_executor(state: AgentState) -> str:
         return "tools" if state["messages"][-1].get("tool_calls") and not guard.exhausted else "reflector"
@@ -99,9 +100,10 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
     def tools(state: AgentState) -> dict:
         out = []
         message_text = state["messages"][-1].get("content") or ""
+        reasoning = state["messages"][-1].get("reasoning") or ""
         for raw in state["messages"][-1]["tool_calls"]:
             call = ToolCall.model_validate(raw)
-            result = dispatch(ctx, call, guard, message_text=message_text)
+            result = dispatch(ctx, call, guard, message_text=message_text, reasoning=reasoning)
             out.append({"role": "tool", "tool_call_id": call.id, "name": call.name,
                         "content": json.dumps(result.model_dump(), ensure_ascii=False, default=str)})
         return {"messages": out}

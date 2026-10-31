@@ -53,13 +53,13 @@ class CachingClient:
             raise ReplayMiss(f"no cached LLM response for key {key[:12]} (replay mode)")
         return None
 
-    def chat(self, messages: list[Message], tools: list[dict] | None = None) -> AssistantTurn:
+    def chat(self, messages: list[Message], tools: list[dict] | None = None, think: bool = False) -> AssistantTurn:
         if self.mode == "off":
-            return self.inner.chat(messages, tools)
-        key = self._key("chat", messages, tools, None)
+            return self.inner.chat(messages, tools, think=think)
+        key = self._key("chat+think" if think else "chat", messages, tools, None)
         if (cached := self._lookup(key)) is not None:
             return AssistantTurn.model_validate_json(cached)
-        turn = self.inner.chat(messages, tools)
+        turn = self.inner.chat(messages, tools, think=think)
         self._put(key, "chat", turn.model_dump_json())
         return turn
 
