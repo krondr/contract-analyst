@@ -35,7 +35,7 @@ GROUP_SCHEMAS = {"header": HeaderOut, "core_terms": TermsOut, "dealer": TermsOut
 _REGEX_KIND = {"contract": DocKind.MAIN, "supplement": DocKind.SUPPLEMENT, "agreement": DocKind.FRAMEWORK,
                "unknown": DocKind.UNKNOWN}
 _HEADER_KINDS = {"number": "doc_number", "doc_date": "date", "city": "text", "parent_number": "doc_number",
-                 "parent_date": "date", "effective_from": "date"}
+                 "parent_date": "date", "effective_from": "date", "effective_to": "date"}
 _TIMEOUTS = (TimeoutError, httpx.TimeoutException)
 
 
@@ -230,7 +230,7 @@ def understand_document(doc: DocumentText, header: HeaderGuess, client: LLMClien
         doc_id=doc.doc_id, file_name=doc.file.name, title=title, is_draft=is_draft,
         kind=kind, number=values["number"].model_dump(), doc_date=_typed_date(values["doc_date"]),
         city=values["city"].model_dump(), parent=_parent(values["parent_number"], values["parent_date"]),
-        effective_from=_typed_date(values["effective_from"]),
+        effective_from=_typed_date(values["effective_from"]), effective_to=_typed_date(values["effective_to"]),
         subject_category=Extracted[str](value=category, status=ValueStatus.ACCEPTED,
                                         reason="classified_by_llm" if acc.header else "default"),
         parties=acc.parties, terms=acc.terms, rates=acc.rates, ops=acc.ops, issues=issues)

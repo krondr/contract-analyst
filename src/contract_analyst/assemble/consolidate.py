@@ -33,6 +33,18 @@ def _accepted(ext: Extracted) -> object | None:
     return ext.value if ext.status == ValueStatus.ACCEPTED else None
 
 
+REPLACING = {OpType.REPLACE_CLAUSE, OpType.RESTATE_SECTION, OpType.REPLACE_APPENDIX, OpType.RESTATE_DOCUMENT,
+             OpType.DELETE_CLAUSE}
+
+
+def _end(rec: DocumentRecord) -> date | None:
+    """When a document stops applying: its own end date, else the latest end date of its operations."""
+    if (own := _accepted(rec.effective_to)) is not None:
+        return own
+    ends = [op.effective_to for op in rec.ops if op.status == ValueStatus.ACCEPTED]
+    return max(ends) if ends and all(ends) else None
+
+
 def _effective(rec: DocumentRecord, chain: ContractChain, doc: ChainDoc) -> date | None:
     if doc.role == "main" and chain.main_date is not None and chain.main_date.value is not None:
         return chain.main_date.value
@@ -67,7 +79,8 @@ class _State:
             state.current = Extracted[str](status=ValueStatus.ABSENT, reason="заменено новой редакцией документа")
         self.rates = []
 
-    def set_term(self, name: str, ext: Extracted[str], eff: date | None, doc_id: str, as_of: date) -> None:
+    def set_term(self, name: str, ext: Extracted[str], eff: date | None, doc_id: str, as_of: date,
+                 combine: bool = False) -> None:
         change = TermChange(value=ext.value, effective_from=eff, doc_id=doc_id, source=ext.source)
         state = self.terms.get(name)
         if eff is not None and eff > as_of:
@@ -77,6 +90,12 @@ class _State:
             return
         if state is None:
             self.terms[name] = TermState(name=name, current=ext)
+            return
+        if combine and state.current.status == ValueStatus.ACCEPTED:
+            if ext.value not in (state.current.value or ""):
+                state.current = ext.model_copy(update={
+                    "value": f"{state.current.value}; {ext.value}",
+                    "alternatives": [*state.current.alternatives, *([state.current.source] if state.current.source else [])]})
             return
         if state.current.status == ValueStatus.ACCEPTED:
             state.history.append(TermChange(value=state.current.value, effective_from=None,
@@ -111,16 +130,20 @@ def consolidate(chain: ContractChain, records: dict[str, DocumentRecord], as_of:
             issues.append(Issue(code="missing_record", message=f"Документ {doc.doc_id} не разобран"))
             continue
         eff = _effective(rec, chain, doc)
-        timeline.append(TimelineEvent(when=eff, doc_id=doc.doc_id, number=doc.number, summary=_summary(rec, doc),
+        end = _end(rec) if doc.role != "main" else None
+        expired = end is not None and end < as_of
+        summary = _summary(rec, doc) + (f" (истёк {end})" if expired else "")
+        timeline.append(TimelineEvent(when=eff, doc_id=doc.doc_id, number=doc.number, summary=summary,
                                       invalidated=doc.invalidated_by is not None))
-        if doc.invalidated_by is not None:
+        if doc.invalidated_by is not None or expired:
             continue
         accepted_ops = [op for op in rec.ops if op.status == ValueStatus.ACCEPTED]
+        additive = doc.role == "supplement" and not any(op.op in REPLACING for op in accepted_ops)
         if any(op.op == OpType.RESTATE_DOCUMENT for op in accepted_ops) and (eff is None or eff <= as_of):
             state.reset()
         for name, ext in rec.terms.items():
             if ext.status == ValueStatus.ACCEPTED:
-                state.set_term(name, ext, eff, doc.doc_id, as_of)
+                state.set_term(name, ext, eff, doc.doc_id, as_of, combine=additive)
         for row in rec.rates:
             if row.status == ValueStatus.ACCEPTED:
                 state.add_rate(row, eff, as_of)

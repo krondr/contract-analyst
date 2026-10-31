@@ -196,7 +196,7 @@ def _to_record(doc: GoldenDocument):
         doc_id=doc.doc_id, file_name=doc.file, title=doc.file, is_draft=doc.is_draft,
         kind=Extracted(value=doc.kind, status=ValueStatus.ACCEPTED), number=ext(doc.number).model_dump(),
         doc_date=ext(doc.doc_date).model_dump(), city=ext(doc.city).model_dump(), parent=parent.model_dump(),
-        effective_from=ext(doc.effective_from).model_dump(),
+        effective_from=ext(doc.effective_from).model_dump(), effective_to=ext(doc.effective_to).model_dump(),
         subject_category=Extracted(value=doc.subject_category, status=ValueStatus.ACCEPTED),
         terms={k: ext(v) for k, v in doc.terms.items()},
         rates=[RateRow(label=r.label, amount=r.amount, vat=r.vat, valid_from=r.valid_from, valid_to=r.valid_to,

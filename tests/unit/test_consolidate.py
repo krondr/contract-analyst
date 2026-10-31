@@ -21,7 +21,8 @@ def main(**kw):
 
 def test_replace_updates_current_keeps_history():
     c = run([main(terms={"validity": "до 31.12.2025"}),
-             rec("s", "D990000002-01", parent=MAIN, effective=date(2025, 10, 1), terms={"validity": "до 31.12.2026"})])
+             rec("s", "D990000002-01", parent=MAIN, effective=date(2025, 10, 1), terms={"validity": "до 31.12.2026"},
+                 ops=[(OpType.REPLACE_CLAUSE, "7.1", None)])])
     state = c.terms["validity"]
     assert state.current.value == "до 31.12.2026" and [h.value for h in state.history] == ["до 31.12.2025"]
 
@@ -89,3 +90,21 @@ def test_missing_main_terms_from_supplements_only():
 
 def test_as_of_before_start_not_yet_in_force():
     assert run([main()], date(2022, 1, 1)).status == "not_yet_in_force"
+
+
+def test_expired_supplement_is_not_applied_after_its_end():
+    records = [main(terms={"plan_indicators": "базовый план"}),
+               rec("s", "D990000002-01", parent=MAIN, effective=date(2021, 10, 1), effective_to=date(2021, 10, 31),
+                   terms={"plan_indicators": "план на октябрь"})]
+    assert run(records).terms["plan_indicators"].current.value == "базовый план"
+    assert run(records, date(2021, 10, 15)).terms["plan_indicators"].current.value == "план на октябрь"
+    assert any("истёк" in e.summary for e in run(records).timeline)
+
+
+def test_supplement_that_only_adds_obligations_combines_terms():
+    c = run([main(terms={"payment_terms": "оплата ежемесячно"}),
+             rec("s", "D990000002-01", parent=MAIN, effective=date(2024, 1, 1),
+                 terms={"payment_terms": "сервисные услуги оплачиваются ежеквартально"})])
+    current = c.terms["payment_terms"].current
+    assert current.value == "оплата ежемесячно; сервисные услуги оплачиваются ежеквартально"
+    assert current.alternatives and c.terms["payment_terms"].history == []

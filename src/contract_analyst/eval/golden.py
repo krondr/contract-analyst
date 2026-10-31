@@ -58,6 +58,7 @@ class GoldenDocument(BaseModel):
     parent_number: GoldenValue = GoldenValue()
     parent_date: GoldenValue = GoldenValue()
     effective_from: GoldenValue = GoldenValue()
+    effective_to: GoldenValue = GoldenValue()
     subject_category: str = "other"
     counterparty_type: GoldenValue = GoldenValue()
     terms: dict[str, GoldenValue] = {}

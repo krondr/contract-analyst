@@ -7,7 +7,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PageMethod(StrEnum):
@@ -162,6 +162,7 @@ class DocumentRecord(BaseModel):
     city: Extracted[str]
     parent: Extracted[ParentRef]
     effective_from: Extracted[date]
+    effective_to: Extracted[date] = Field(default_factory=lambda: Extracted[date](status=ValueStatus.ABSENT))
     subject_category: Extracted[str]
     parties: list[Party] = []
     terms: dict[str, Extracted[str]] = {}

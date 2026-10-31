@@ -31,6 +31,7 @@ class HeaderOut(BaseModel):
     parent_number: ValueOut = ValueOut()
     parent_date: ValueOut = ValueOut()
     effective_from: ValueOut = ValueOut()
+    effective_to: ValueOut = ValueOut()
     parties: list[PartyOut] = []
     subject_category: str = "other"
 

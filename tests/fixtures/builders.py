@@ -116,7 +116,7 @@ def acc(value, doc_id: str = "d", quote: str = "цитата", page: int = 1):
 
 
 def make_record(doc_id: str, number: str | None, kind: str = "supplement", doc_date=None, parent: str | None = None,
-                parent_date=None, effective=None, ops=(), terms: dict | None = None, rates=(), party_names=(),
+                parent_date=None, effective=None, effective_to=None, ops=(), terms: dict | None = None, rates=(), party_names=(),
                 category: str = "other", is_draft: bool = False, file_name: str | None = None, rejected_date=None):
     """DocumentRecord for assembly tests. ops: (OpType, target, effective_from); rates: (label, amount, from, to)."""
     from decimal import Decimal
@@ -144,7 +144,8 @@ def make_record(doc_id: str, number: str | None, kind: str = "supplement", doc_d
         kind=acc(kind, doc_id), number=acc(number, doc_id) if number else absent(), doc_date=date_ext,
         city=absent(),
         parent=acc(ParentRef(number=parent, date_stated=parent_date), doc_id) if parent else absent(),
-        effective_from=acc(effective, doc_id) if effective else absent(), subject_category=acc(category, doc_id),
+        effective_from=acc(effective, doc_id) if effective else absent(),
+        effective_to=acc(effective_to, doc_id) if effective_to else absent(), subject_category=acc(category, doc_id),
         parties=[Party(role=f"p{i}", org_type=acc("ООО", doc_id), name=acc(n, doc_id)) for i, n in enumerate(party_names)],
         terms={k: acc(v, doc_id) for k, v in (terms or {}).items()},
         rates=[RateRow(label=label, amount=Decimal(str(amount)), valid_from=vf, valid_to=vt, status=ValueStatus.ACCEPTED,

@@ -31,7 +31,7 @@ subject_categories:
 
 # Key order = order of LLM calls. A new field needs only an entry here and in field_descriptions.
 field_groups:
-  header: [kind, number, doc_date, city, parent, effective_from, parties, subject_category]
+  header: [kind, number, doc_date, city, parent, effective_from, effective_to, parties, subject_category]
   core_terms: [subject, validity, payment_terms, termination, notification_channel, penalties]
   money: [rates]
   dealer: [plan_indicators, tariff_groups, trade_points]
@@ -44,6 +44,7 @@ field_descriptions:
   city: "Город заключения документа"
   parent: "Номер и дата договора, к которому относится соглашение, как они написаны в тексте"
   effective_from: "Дата вступления документа в силу или дата, с которой он распространяет действие"
+  effective_to: "Дата, до которой действует сам документ, если она указана (например, соглашение на один месяц)"
   parties: "Стороны: роль, организационно-правовая форма, наименование"
   subject_category: "Категория предмета договора из закрытого списка"
   subject: "Предмет договора: что одна сторона поручает или передаёт другой"
