@@ -106,3 +106,48 @@ def text_doc(pages: list[str], doc_id: str = "doc000000001", name: str = "mem.pd
              for i, t in enumerate(pages, start=1)]
     file = InputFile(path=name, name=name, sha256=doc_id.ljust(64, "0"), format=DocFormat.PDF, size_bytes=0)
     return DocumentText(doc_id=doc_id, file=file, pages=built, clauses=segment_clauses(built), status="ok")
+
+
+def acc(value, doc_id: str = "d", quote: str = "цитата", page: int = 1):
+    """Accepted Extracted value with a source."""
+    from contract_analyst.models import Extracted, Source, ValueStatus
+
+    return Extracted(value=value, status=ValueStatus.ACCEPTED, source=Source(doc_id=doc_id, page=page, quote=quote))
+
+
+def make_record(doc_id: str, number: str | None, kind: str = "supplement", doc_date=None, parent: str | None = None,
+                parent_date=None, effective=None, ops=(), terms: dict | None = None, rates=(), party_names=(),
+                category: str = "other", is_draft: bool = False, file_name: str | None = None, rejected_date=None):
+    """DocumentRecord for assembly tests. ops: (OpType, target, effective_from); rates: (label, amount, from, to)."""
+    from decimal import Decimal
+
+    from contract_analyst.models import (
+        AmendmentOp,
+        DocumentRecord,
+        Extracted,
+        ParentRef,
+        Party,
+        RateRow,
+        Source,
+        ValueStatus,
+    )
+
+    def absent():
+        return Extracted(status=ValueStatus.ABSENT)
+
+    src = Source(doc_id=doc_id, page=1, quote="цитата")
+    date_ext = acc(doc_date, doc_id) if doc_date else absent()
+    if rejected_date:
+        date_ext = Extracted(value=rejected_date, status=ValueStatus.REJECTED, source=src, reason="ocr_low_confidence")
+    return DocumentRecord(
+        doc_id=doc_id, file_name=file_name or f"{doc_id}.pdf", title=number or doc_id, is_draft=is_draft,
+        kind=acc(kind, doc_id), number=acc(number, doc_id) if number else absent(), doc_date=date_ext,
+        city=absent(),
+        parent=acc(ParentRef(number=parent, date_stated=parent_date), doc_id) if parent else absent(),
+        effective_from=acc(effective, doc_id) if effective else absent(), subject_category=acc(category, doc_id),
+        parties=[Party(role=f"p{i}", org_type=acc("ООО", doc_id), name=acc(n, doc_id)) for i, n in enumerate(party_names)],
+        terms={k: acc(v, doc_id) for k, v in (terms or {}).items()},
+        rates=[RateRow(label=label, amount=Decimal(str(amount)), valid_from=vf, valid_to=vt, status=ValueStatus.ACCEPTED,
+                       source=src) for label, amount, vf, vt in rates],
+        ops=[AmendmentOp(op=op, target=target, effective_from=eff, status=ValueStatus.ACCEPTED, source=src)
+             for op, target, eff in ops])
