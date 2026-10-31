@@ -11,7 +11,9 @@ from contract_analyst.config import load_settings
 
 app = typer.Typer(no_args_is_help=True, help="Аналитик цепочек и кластеров договоров")
 golden_app = typer.Typer(no_args_is_help=True, help="Инструменты эталона")
+eval_app = typer.Typer(no_args_is_help=True, help="Оценка прогонов")
 app.add_typer(golden_app, name="golden")
+app.add_typer(eval_app, name="eval")
 
 
 @app.command()
@@ -112,3 +114,34 @@ def golden_review(golden: Path, disputed: Path = Path("data/golden/disputed.json
 
     diffs = [GoldenDiff(**d) for d in json.loads(disputed.read_text(encoding="utf-8"))] if disputed.exists() else []
     typer.echo(f"written {build_review_page(load_golden(golden), diffs, out)}")
+
+
+@eval_app.command("golden")
+def eval_golden(run: Path, golden: Path = Path("data/golden/golden.yaml")) -> None:
+    """Сравнить прогон с эталоном: метрики и ловушки."""
+    from contract_analyst.eval.golden import load_golden
+    from contract_analyst.eval.metrics import score_run
+    from contract_analyst.eval.traps import check_traps
+
+    gs = load_golden(golden)
+    typer.echo(score_run(run, gs).model_dump_json(indent=1))
+    for trap in check_traps(run, gs):
+        typer.echo(f"{'OK ' if trap.passed else 'FAIL'} {trap.trap_id}: {trap.detail}")
+
+
+@app.command()
+def experiment(name: str, data: Path = Path("data/raw"), golden: Path = Path("data/golden/golden.yaml"),
+               as_of: str = "2026-10-30", models: str = "", variants: str = "A,B,S",
+               append: bool = False, out: Path = Path("docs/experiments")) -> None:
+    """Замеры: e2 (модели), e3 (свёртка кодом или LLM), e4 (оркестрация)."""
+    from datetime import date
+
+    from contract_analyst.eval import experiments as ex
+    from contract_analyst.eval.golden import load_golden
+
+    gs = load_golden(golden)
+    specs = ex.experiment_specs(name, models=[m for m in models.split(",") if m], variants=variants.split(","))
+    results = [ex.run_variant(spec, data, gs, date.fromisoformat(as_of)) for spec in specs]
+    merged = ex.save_results(name, results, out, append=append)
+    title, rule, winner = ex.decide(name, merged)
+    typer.echo(f"written {ex.write_experiment_md(name, title, merged, rule, winner, out / f'{name}.md')}")
