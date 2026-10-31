@@ -38,3 +38,10 @@ def test_detect_draft():
 def test_header_on_ocr_text_with_misread_d():
     h = parse_header("ДОГОВОР № 0990000018-01\nк Договору № 0980000016-09 от 15.12.2015 г.")
     assert (h.number, h.parent_number) == ("D990000018-01", "D980000016-09")
+
+
+def test_header_title_with_adjective_and_termination_parent():
+    h = parse_header("ДИЛЕРСКИЙ ДОГОВОР № D990300001-01\nг. Тверь «12» мая 2022 г.")
+    assert (h.title_kind, h.number) == ("contract", "D990300001-01")
+    s = parse_header("Соглашение № D990200002-01\nо расторжении Договора оказания услуг № D990200001-01 от 15.02.2023")
+    assert (s.parent_number, s.parent_date) == ("D990200001-01", date(2023, 2, 15))

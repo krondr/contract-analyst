@@ -11,10 +11,11 @@ from pydantic import BaseModel
 from contract_analyst.ingest.normalize import normalize_text
 from contract_analyst.parsing.patterns import _OCR_NUMBER_RE, find_dates, find_doc_numbers
 
-_TITLE_RE = re.compile(r"^\s*(дополнительное\s+соглашение|соглашение|договор)\b", re.IGNORECASE)
+_TITLE_RE = re.compile(r"^\s*(?:(?!дополнительн)[А-ЯЁа-яё-]+(?:ий|ый|ой|ая|ое)\s+)?(дополнительное\s+соглашение|соглашение|договор)\b",
+                       re.IGNORECASE)
 _TITLE_KIND = {"дополнительное": "supplement", "соглашение": "agreement", "договор": "contract"}
 _CITY_RE = re.compile(r"^\s*г\.\s*([А-ЯЁ][а-яё-]+)")
-_PARENT_ANCHOR_RE = re.compile(r"\b(?:к|в)\s+(?:договор\w*|соглашени\w*)", re.IGNORECASE)
+_PARENT_ANCHOR_RE = re.compile(r"\b(?:к|в|о\s+расторжении)\s+(?:договор\w*|соглашени\w*)", re.IGNORECASE)
 _DRAFT_LINE_RE = re.compile(r"^\s*проект(?:\s+договора)?\s*[.:]?\s*$", re.IGNORECASE)
 _DRAFT_NAME_RE = re.compile(r"(?<![а-яё])проект(?![а-яё])")
 _HEADER_LINES = 15

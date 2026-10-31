@@ -29,9 +29,17 @@ def _deskew(gray: np.ndarray) -> np.ndarray:
     return cv2.warpAffine(gray, matrix, (w, h), flags=cv2.INTER_CUBIC, borderValue=255)
 
 
+def sauvola(gray: np.ndarray, window: int = 31, k: float = 0.2, r: float = 128.0) -> np.ndarray:
+    """Sauvola local thresholding with box filters (core OpenCV only, no contrib modules)."""
+    g = gray.astype(np.float64)
+    mean = cv2.boxFilter(g, cv2.CV_64F, (window, window), borderType=cv2.BORDER_REPLICATE)
+    sq_mean = cv2.boxFilter(g * g, cv2.CV_64F, (window, window), borderType=cv2.BORDER_REPLICATE)
+    std = np.sqrt(np.maximum(sq_mean - mean * mean, 0.0))
+    threshold = mean * (1 + k * (std / r - 1))
+    return np.where(g > threshold, 255, 0).astype(np.uint8)
+
+
 def preprocess(image: np.ndarray, mode: Literal["none", "deskew_sauvola"]) -> np.ndarray:
     if mode == "none":
         return image
-    gray = _deskew(_to_gray(image))
-    return cv2.ximgproc.niBlackThreshold(gray, 255, cv2.THRESH_BINARY, 31, 0.2,
-                                         binarizationMethod=cv2.ximgproc.BINARIZATION_SAUVOLA)
+    return sauvola(_deskew(_to_gray(image)))
