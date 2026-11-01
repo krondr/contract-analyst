@@ -13,7 +13,7 @@ from contract_analyst.gate.checks import (
 from contract_analyst.gate.gate import Candidate, apply_gate, gate_op, gate_rate
 from contract_analyst.models import OcrWord, Page, PageQuality
 from contract_analyst.understand.schemas import OpOut, RateOut
-from tests.fixtures.builders import text_doc
+from tests.fixtures.builders import ocr_doc, text_doc
 
 TEXT_PAGE = Page(number=1, method="text", text="Ставка составляет 1500 рублей. Договор от «21» января 2021 г.",
                  quality=PageQuality(chars=60))
@@ -105,3 +105,100 @@ def test_rate_reanchored_in_table_with_cells_on_separate_lines():
     assert row.status == "accepted" and row.source.quote == "Оптима 330,5 500"
     wrong = gate_rate(RateOut(label="Оптима", amount="270", page=1, quote="Ставка"), table, load_settings())
     assert wrong.status == "rejected"
+
+
+def test_value_without_quote_is_rejected_not_a_crash(doc):
+    for kind, value in [("text", "длинное значение условия"), ("date", "2021-01-21"), ("money", "1500")]:
+        r = apply_gate(Candidate(field="x", value=value, kind=kind, page=1, quote=None), doc, load_settings())
+        assert r.status == "rejected" and r.reason.startswith("no_quote")
+
+
+def test_ocr_value_is_checked_against_the_page_not_the_fuzzy_quote():
+    doc = ocr_doc("Ставка вознаграждения составляет 1600 рублей без НДС за каждого абонента.")
+    quote = "Ставка вознаграждения составляет 1500 рублей без НДС за каждого абонента."
+    s = load_settings()
+    r = apply_gate(Candidate(field="x", value="1500", kind="money", page=1, quote=quote), doc, s)
+    assert r.status == "rejected" and r.reason.startswith("value_not_on_page")
+    assert gate_rate(RateOut(label="Ставка вознаграждения", amount="1500", page=1, quote=quote), doc, s).status == "rejected"
+    fixed = quote.replace("1500", "1600")
+    assert apply_gate(Candidate(field="x", value="1600", kind="money", page=1, quote=fixed), doc, s).status == "accepted"
+
+
+def test_ocr_value_word_itself_must_be_confident():
+    doc = ocr_doc("Ставка 1500 рублей.\nПени 1500 рублей.", conf={1: 0.5})  # only the first 1500 is unsure
+    s = load_settings()
+    r = apply_gate(Candidate(field="x", value="1500", kind="money", page=1, quote="Ставка 1500 рублей."), doc, s)
+    assert r.status == "rejected" and r.reason.startswith("ocr_value_unconfirmed")
+    assert apply_gate(Candidate(field="x", value="1500", kind="money", page=1, quote="Пени 1500 рублей."), doc,
+                      s).status == "accepted"
+
+
+def test_ocr_value_word_missing_from_recognized_words_fails_closed():
+    doc = ocr_doc("Ставка 1500 рублей.", words=["Ставка", "рублей."])
+    r = apply_gate(Candidate(field="x", value="1500", kind="money", page=1, quote="Ставка 1500 рублей."), doc,
+                   load_settings())
+    assert r.status == "rejected"
+
+
+@pytest.mark.parametrize("title", ["Дополнительное соглашение № Д990000015-01",
+                                   "Дополнительное соглашение № 0990000015-01",
+                                   "Дополнительное соглашение №Д990000015-01"])
+def test_scanned_document_number_with_misread_d_is_confirmed(title):
+    s = load_settings()
+    c = Candidate(field="number", value="D990000015-01", kind="doc_number", page=1, quote=title)
+    assert apply_gate(c, ocr_doc(title), s).status == "accepted"
+    assert apply_gate(c, ocr_doc(title, conf={len(title.split()) - 1: 0.5}), s).status == "rejected"
+
+
+def test_split_reading_of_a_grouped_amount_is_rejected():
+    quote = "Вознаграждение составляет 1 500 рублей за абонента."
+    doc, s = text_doc([quote]), load_settings()
+    for value in ("500", "1"):
+        assert apply_gate(Candidate(field="x", value=value, kind="money", page=1, quote=quote), doc, s).status == "rejected"
+        assert gate_rate(RateOut(label="Вознаграждение", amount=value, page=1, quote=quote), doc, s).status == "rejected"
+    assert gate_rate(RateOut(label="Вознаграждение", amount="1 500", page=1, quote=quote), doc, s).status == "accepted"
+
+
+def test_quote_starting_inside_a_number_is_not_evidence():
+    doc = text_doc(["Цена товара составляет 21500 рублей."])
+    r = apply_gate(Candidate(field="x", value="1500", kind="money", page=1, quote="1500 рублей"), doc, load_settings())
+    assert r.status == "rejected" and r.reason.startswith("value_not_on_page")
+
+
+def test_numbers_and_dates_of_a_text_value_must_be_on_the_page():
+    doc = text_doc([("8.2. За нарушение срока оплаты Арендатор уплачивает штраф 1000 рублей за каждый день "
+                     "просрочки.\n9.1. Договор действует до «31» декабря 2026 года.")])
+    s = load_settings()
+
+    def term(value, quote):
+        return apply_gate(Candidate(field="t", value=value, kind="text", page=1, quote=quote), doc, s).status
+
+    penalty = "Арендатор уплачивает штраф 1000 рублей за каждый день просрочки"
+    assert term("штраф 5000 рублей за каждый день просрочки", penalty) == "rejected"
+    assert term("штраф 1000 рублей за каждый день просрочки", penalty) == "accepted"
+    validity = "Договор действует до «31» декабря 2026 года"
+    assert term("действует до 31.12.2026", validity) == "accepted"
+    assert term("действует до 31.12.2027", validity) == "rejected"
+
+
+def test_amount_read_from_table_cells_on_one_line_is_conflict():
+    doc = text_doc(["Ставка, руб. без НДС с 01.07.2026 с 01.01.2027\nТариф Старт 270 500\nОптима 330,5 500"])
+    s = load_settings()
+    r = gate_rate(RateOut(label="Тариф Старт", amount="500", valid_from="2027-01-01", page=1, quote="Тариф Старт 270 500"), doc, s)
+    assert r.status == "conflict" and r.reason.startswith("ambiguous_number")
+    ok = gate_rate(RateOut(label="Оптима", amount="330,5", valid_from="2026-07-01", page=1,
+                           quote="Оптима 330,5 500"), doc, s)
+    assert ok.status == "accepted"
+
+
+def test_rate_reanchoring_stays_on_the_hinted_page():
+    doc = text_doc(["Ставки приведены в таблице на следующей странице.", "Тариф А 700"])
+    r = gate_rate(RateOut(label="Тариф А", amount="700", page=1, quote="Ставки приведены в таблице"), doc,
+                  load_settings())
+    assert r.status == "rejected"
+
+
+def test_rate_reanchoring_with_several_candidates_is_conflict():
+    doc = text_doc(["Ставки на 2026 год:\nТариф А 700\nСтавки на 2027 год:\nТариф А: 700 рублей"])
+    r = gate_rate(RateOut(label="Тариф А", amount="700", page=1, quote="Ставки на 2026 год"), doc, load_settings())
+    assert r.status == "conflict" and r.reason.startswith("reanchor_ambiguous")

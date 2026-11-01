@@ -108,6 +108,21 @@ def text_doc(pages: list[str], doc_id: str = "doc000000001", name: str = "mem.pd
     return DocumentText(doc_id=doc_id, file=file, pages=built, clauses=segment_clauses(built), status="ok")
 
 
+def ocr_doc(text: str, conf: dict[int, float] | None = None, words: list[str] | None = None,
+            doc_id: str = "scan00000001"):
+    """In-memory DocumentText with one OCR page. Its words are the text's tokens (or `words`), each with
+    confidence 0.97 unless `conf` maps the word's index to another value."""
+    from contract_analyst.models import DocFormat, DocumentText, InputFile, Page, PageQuality
+
+    tokens = text.split() if words is None else words
+    page = Page(number=1, method="ocr", text=text, words=[OcrWord(text=w, conf=(conf or {}).get(i, 0.97))
+                                                           for i, w in enumerate(tokens)],
+                quality=PageQuality(chars=len(text), ocr_mean_conf=0.97, low_conf_ratio=0.0))
+    file = InputFile(path="scan.pdf", name="scan.pdf", sha256=doc_id.ljust(64, "0"), format=DocFormat.PDF,
+                     size_bytes=0)
+    return DocumentText(doc_id=doc_id, file=file, pages=[page], clauses=[], status="ok")
+
+
 def acc(value, doc_id: str = "d", quote: str = "цитата", page: int = 1):
     """Accepted Extracted value with a source."""
     from contract_analyst.models import Extracted, Source, ValueStatus
