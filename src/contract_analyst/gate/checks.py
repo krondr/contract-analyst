@@ -18,6 +18,7 @@ from contract_analyst.parsing.patterns import (
     DOC_NUMBER_RE,
     date_spans,
     doc_number_spans,
+    ends_table_row,
     find_dates,
     find_doc_numbers,
     find_numbers,
@@ -31,6 +32,11 @@ Figure = date | Decimal | str  # what a value states and the page must show: a d
 MIN_DATE, MAX_DATE = date(2000, 1, 1), date(2035, 12, 31)
 _TYPOGRAPHY = str.maketrans({"«": '"', "»": '"', "“": '"', "”": '"', "„": '"', "–": "-", "—": "-"})
 _TOKEN_RE = re.compile(r"[0-9A-Za-zА-Яа-яЁё-]{3,}")
+# A sentence ends at ; or at . ! ? after a word of four letters or more (so «п.», «г.», «руб.» do not end one),
+# and before a line that starts a numbered clause.
+_SENTENCE_END = re.compile(r"(?<=[^\W\d_]{4})[.!?](?=\s|$)|;|\n(?=\d{1,3}(?:\.\d{1,3})*\.?\s)")
+_IN_FORCE = re.compile(r"вступа\w*\s+в\s+(?:силу|действие)|распростран\w*", re.IGNORECASE)
+_REFERENCE = re.compile(r"\bот\s*$", re.IGNORECASE)  # «Договор от 21.01.2021» names a document, not a period
 
 
 class CheckResult(BaseModel):
@@ -214,6 +220,92 @@ def check_value_on_page(value: str, kind: ValueKind, page: Page, spans: list[Spa
     if ambiguous is not None:
         return _fail("ambiguous_number", f"«{_show(ambiguous)}» может быть частью числа или соседней ячейкой таблицы")
     return _ok("value_on_page")
+
+
+def sentence_around(text: str, start: int, end: int) -> Span:
+    """The sentence or sentences that hold text[start:end]."""
+    begin = 0
+    for m in _SENTENCE_END.finditer(text, 0, start):
+        begin = m.end()
+    m = _SENTENCE_END.search(text, end)
+    return begin, m.end() if m else len(text)
+
+
+def _lines(text: str) -> list[Span]:
+    spans, start = [], 0
+    for line in text.split("\n"):
+        spans.append((start, start + len(line)))
+        start += len(line) + 1
+    return spans
+
+
+def _dates_between(text: str, start: int, end: int, words: list | None, threshold: float,
+                   references: bool = True) -> set[date]:
+    """Dates stated inside text[start:end]; on a scan only confidently recognized ones."""
+    return {d for d, a, b in date_spans(text) if start <= a and b <= end
+            and (references or not _REFERENCE.search(text, max(0, a - 6), a))
+            and (words is None or confident(a, b, words, threshold))}
+
+
+def _header_dates(text: str, lines: list[Span], row: int, words: list | None, threshold: float) -> set[date]:
+    """Dates of the nearest dated line above a table row, with the dated lines right above it: the header of the
+    row's columns or section."""
+    found: set[date] = set()
+    for i in range(row - 1, -1, -1):
+        if dates := _dates_between(text, *lines[i], words, threshold):
+            found |= dates
+        elif found:
+            break
+    return found
+
+
+def check_period_near(amount: Decimal, period: list[date | None], page: Page, spans: list[Span],
+                      conf_threshold: float) -> CheckResult:
+    """A rate's period dates must be stated next to the amount: on its row, in the nearest dated header above
+    it, or — for a rate in prose — in its sentence. Somewhere else in the document is not enough."""
+    wanted = [d for d in period if d]
+    if not wanted:
+        return _ok("period_near")
+    source = normalize_text(page.text)
+    words = _word_confidences(page) if page.method == PageMethod.OCR else None
+    lines = _lines(source)
+    places = [(a, b) for f, a, b, amb in _figures(source)
+              if f == amount and not amb and any(s <= a and b <= e for s, e in spans)]
+    for a, b in places:
+        row = next(i for i, (s, e) in enumerate(lines) if s <= a <= e)
+        near = _dates_between(source, *lines[row], words, conf_threshold)
+        near |= _header_dates(source, lines, row, words, conf_threshold)
+        if not ends_table_row(source, b):
+            near |= _dates_between(source, *sentence_around(source, a, b), words, conf_threshold)
+        if all(d in near for d in wanted):
+            return _ok("period_near")
+    shown = " – ".join(_show(d) for d in wanted)
+    return _fail("date_not_near", f"период {shown} не указан рядом со ставкой {amount} на странице {page.number}")
+
+
+def check_op_dates_near(dates: list[date | None], page: Page, spans: list[Span], pages: list[Page],
+                        conf_threshold: float) -> CheckResult:
+    """An operation's dates must be stated in its own sentence. Only when that sentence names no date (other than
+    references such as «Договор от 21.01.2021») may the document's entry-into-force statement give them."""
+    wanted = [d for d in dates if d]
+    if not wanted:
+        return _ok("dates_near")
+    source = normalize_text(page.text)
+    words = _word_confidences(page) if page.method == PageMethod.OCR else None
+    stated: set[date] = set()
+    for a, b in spans:
+        stated |= _dates_between(source, *sentence_around(source, a, b), words, conf_threshold, references=False)
+    if not stated:
+        for other in pages:
+            text = normalize_text(other.text)
+            other_words = _word_confidences(other) if other.method == PageMethod.OCR else None
+            for m in _IN_FORCE.finditer(text):
+                stated |= _dates_between(text, *sentence_around(text, m.start(), m.end()), other_words, conf_threshold,
+                                         references=False)
+    if missing := [d for d in wanted if d not in stated]:
+        return _fail("date_not_near", f"даты {_show(missing[0])} нет в предложении с операцией на странице {page.number}"
+                                      " и в условии о вступлении в силу")
+    return _ok("dates_near")
 
 
 def check_format(value: str, kind: ValueKind) -> CheckResult:

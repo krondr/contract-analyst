@@ -198,6 +198,60 @@ def test_rate_reanchoring_stays_on_the_hinted_page():
     assert r.status == "rejected"
 
 
+def test_rate_period_must_be_stated_on_its_row_or_in_the_header_above():
+    doc = text_doc([("Приложение № 7\nСтавки на период с 01.07.2026 по 31.12.2026:\nТариф А 500\n"
+                     "Ставки с 01.01.2027:\nТариф А 800")])
+    s = load_settings()
+
+    def rate(amount, start, end, quote="Тариф А"):
+        return gate_rate(RateOut(label="Тариф А", amount=amount, valid_from=start, valid_to=end, page=1,
+                                 quote=f"{quote} {amount}" if quote == "Тариф А" else quote), doc, s)
+
+    swapped = rate("800", "2026-07-01", "2026-12-31")
+    assert swapped.status == "conflict" and swapped.reason.startswith("date_not_near")
+    assert rate("500", "2027-01-01", None).status == "conflict"
+    assert rate("500", "2026-07-01", "2026-12-31").status == "accepted"
+    assert rate("800", "2027-01-01", None).status == "accepted"
+    both = "Ставки на период с 01.07.2026 по 31.12.2026: Тариф А 500 Ставки с 01.01.2027: Тариф А 800"
+    assert rate("800", "2026-07-01", "2026-12-31", quote=both).status == "conflict"
+    assert rate("500", "2026-07-01", "2026-12-31", quote=both).status == "accepted"
+
+
+def test_rate_period_later_in_the_same_sentence_counts():
+    doc = text_doc([("2. Ставка вознаграждения составляет 500 рублей без НДС\nи применяется с 01.07.2026 по "
+                     "31.12.2026.\n3. С 01.01.2027 ставка вознаграждения составляет 800 рублей без НДС.")])
+    s = load_settings()
+
+    def rate(amount, start, end):
+        return gate_rate(RateOut(label="Ставка вознаграждения", amount=amount, valid_from=start, valid_to=end, page=1,
+                                 quote=f"Ставка вознаграждения составляет {amount} рублей без НДС"), doc, s).status
+
+    assert rate("500", "2026-07-01", "2026-12-31") == "accepted"
+    assert rate("500", "2027-01-01", None) == "conflict"
+    assert rate("800", "2027-01-01", None) == "accepted"
+
+
+def test_op_date_comes_from_its_own_sentence_or_the_entry_into_force():
+    s = load_settings()
+    dated = text_doc([("1. Расторгнуть Договор № D990000001-01 от 21.01.2021 с 01.01.2027.\n"
+                       "2. Настоящее Соглашение вступает в силу с 01.07.2026.")])
+
+    def terminate(doc, start, quote):
+        return gate_op(OpOut(op="terminate", target="D990000001-01", effective_from=start, page=1, quote=quote),
+                       doc, s)
+
+    quote = "Расторгнуть Договор № D990000001-01 от 21.01.2021 с 01.01.2027"
+    assert terminate(dated, "2027-01-01", quote).status == "accepted"
+    wrong = terminate(dated, "2026-07-01", quote)
+    assert wrong.status == "conflict" and wrong.reason.startswith("date_not_near")
+    assert terminate(dated, "2021-01-21", quote).status == "conflict"  # the contract's own date is a reference
+    undated = text_doc([("1. Расторгнуть Договор № D990000001-01 от 21.01.2021.\n"
+                         "2. Настоящее Соглашение вступает в силу с 01.07.2026.")])
+    quote = "Расторгнуть Договор № D990000001-01 от 21.01.2021"
+    assert terminate(undated, "2026-07-01", quote).status == "accepted"
+    assert terminate(undated, "2021-01-21", quote).status == "conflict"
+
+
 def test_rate_reanchoring_with_several_candidates_is_conflict():
     doc = text_doc(["Ставки на 2026 год:\nТариф А 700\nСтавки на 2027 год:\nТариф А: 700 рублей"])
     r = gate_rate(RateOut(label="Тариф А", amount="700", page=1, quote="Ставки на 2026 год"), doc, load_settings())

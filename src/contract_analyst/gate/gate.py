@@ -16,6 +16,8 @@ from contract_analyst.gate.checks import (
     check_format,
     check_not_redacted,
     check_ocr_confidence,
+    check_op_dates_near,
+    check_period_near,
     check_value_in_quote,
     check_value_on_page,
     locate_quote,
@@ -32,11 +34,11 @@ from contract_analyst.models import (
     Source,
     ValueStatus,
 )
-from contract_analyst.parsing.patterns import find_dates, find_numbers, parse_money
+from contract_analyst.parsing.patterns import find_numbers, parse_money
 from contract_analyst.understand.schemas import OpOut, RateOut
 
-# The evidence fits more than one reading: doubtful rather than wrong.
-_CONFLICT_CODES = {"ambiguous_number", "reanchor_ambiguous"}
+# The evidence fits more than one reading, or the period is not tied to the value: doubtful rather than wrong.
+_CONFLICT_CODES = {"ambiguous_number", "reanchor_ambiguous", "date_not_near"}
 
 
 class Candidate(BaseModel):
@@ -114,10 +116,6 @@ def _iso(value: str | None) -> date | None | str:
         return "bad"
 
 
-def _doc_dates(doc: DocumentText) -> set[date]:
-    return {d for p in doc.pages for d, _ in find_dates(p.text)}
-
-
 def _words(text: str) -> set[str]:
     return set(re.findall(r"[0-9a-zа-яё]+", normalize_text(text).casefold()))
 
@@ -187,10 +185,7 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
         yield check_format(str(amount), "money")
         yield check_ocr_confidence(row.quote, page, threshold)
         yield check_value_on_page(str(amount), "money", page, spans, threshold)
-        dates_on_doc = _doc_dates(doc)
-        for d in (base["valid_from"], base["valid_to"]):
-            if d and d not in dates_on_doc:
-                yield CheckResult(ok=False, code="date_not_in_document", reason=f"даты {d} нет в документе")
+        yield check_period_near(amount, [base["valid_from"], base["valid_to"]], page, spans, threshold)
 
     if failed := _first_failure(checks()):
         return RateRow(**base, status=_status(failed), reason=_reason(failed))
@@ -216,10 +211,7 @@ def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
         if op.op == OpType.INVALIDATE_DOCUMENT:
             yield check_value_in_quote(op.target or "", op.quote, "doc_number")
             yield check_value_on_page(op.target or "", "doc_number", page, spans, threshold)
-        dates_on_doc = _doc_dates(doc)
-        for d in (base["effective_from"], base["effective_to"]):
-            if d and d not in dates_on_doc:
-                yield CheckResult(ok=False, code="date_not_in_document", reason=f"даты {d} нет в документе")
+        yield check_op_dates_near([base["effective_from"], base["effective_to"]], page, spans, doc.pages, threshold)
 
     if failed := _first_failure(checks()):
         return AmendmentOp(**base, status=_status(failed), reason=_reason(failed))

@@ -17,7 +17,7 @@ _MONTH_ALT = r"январ[яь]|феврал[яь]|марта?|апрел[яь]|
 _TEXT_DATE_RE = re.compile(rf"«?\s*(\d{{1,2}})\s*»?\s+({_MONTH_ALT})\s+(\d{{4}})", re.IGNORECASE)
 _NUM_DATE_RE = re.compile(r"(?<!\d)(\d{1,2})\.(\d{1,2})\.(\d{4})(?!\d)")
 _MONEY_RE = re.compile(r"(?<![\d.,])\d{1,3}(?:[  ]\d{3})+(?!\d)(?:[.,]\d+)?|(?<![\d.,])\d+(?:[.,]\d+)?")
-_CELLS_ONLY = re.compile(r"(?:\s+\d+(?:[.,]\d+)?)*\s*")
+_CELLS_ONLY = re.compile(r"[\s|]*(?:\d+(?:[.,]\d+)?[\s|]*)*")
 # What follows a number in a sentence and never starts the next table row: a lowercase word, a bracketed
 # amount in words, a unit.
 _SENTENCE_GOES_ON = re.compile(r"\s*(?:[a-zа-яё(%₽]|(?i:руб|ндс|коп))")
@@ -90,15 +90,19 @@ def _to_decimal(raw: str) -> Decimal | None:
         return None
 
 
-def _may_be_cells(text: str, start: int, end: int) -> bool:
-    """A space-grouped number may be adjacent table cells that PyMuPDF or OCR put on one line: its line has no
-    explicit cell separator and only numbers follow it, there or as the next line's continuation of a sentence."""
-    line_start = text.rfind("\n", 0, start) + 1
+def ends_table_row(text: str, end: int) -> bool:
+    """Only numeric cells follow position `end` on its line, and the next line does not continue a sentence."""
     line_end = text.find("\n", end)
     line_end = len(text) if line_end < 0 else line_end
-    if "|" in text[line_start:line_end] or not _CELLS_ONLY.fullmatch(text, end, line_end):
-        return False
-    return not _SENTENCE_GOES_ON.match(text, line_end)
+    return bool(_CELLS_ONLY.fullmatch(text, end, line_end)) and not _SENTENCE_GOES_ON.match(text, line_end)
+
+
+def _may_be_cells(text: str, start: int, end: int) -> bool:
+    """A space-grouped number may be adjacent table cells that PyMuPDF or OCR put on one line: its row has no
+    explicit cell separator."""
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    return "|" not in text[line_start:None if line_end < 0 else line_end] and ends_table_row(text, end)
 
 
 def number_readings(text: str, split_cells: bool = True) -> list[NumberReading]:
