@@ -114,6 +114,17 @@ def test_document_numbers_of_the_cited_chain_are_backed():
     assert verify_claims(llm("Договор D990000009-01 изменён [doc:s:p1]."), sources)[1] == 1
 
 
+def test_agent_decisions_are_checked_like_other_llm_text():
+    ctx = small_context()
+    ctx.decisions = [Decision(issue_code="parent_date_conflict", contract_number=MAIN, decision="Оставлена дата 15.05.2022.",
+                              rationale="Дата договора 21.01.2021 [doc:m:p1]."),
+                     Decision(issue_code="other", contract_number="D990000009-01", decision="Нет.", rationale="Нет.")]
+    md, removed = verify_claims(render_report(ctx), report_sources(ctx))
+    decisions = md.split("Решения агента")[1].split("## 6.")[0]
+    assert removed == 1 and "15.05.2022" not in decisions and "Дата договора 21.01.2021 [doc:m:p1]." in decisions
+    assert "D990000009-01" not in decisions  # the agent named a contract that is not in the package
+
+
 def test_text_outside_llm_blocks_untouched():
     out, removed = verify_claims("| Ставка | 900 |\n" + llm("Без чисел."), {})
     assert removed == 0 and "| Ставка | 900 |" in out

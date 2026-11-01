@@ -131,8 +131,9 @@
 
 | Проблема | Договор | Решение | Обоснование |
 |---|---|---|---|
+{% set known = chains | map(attribute="contract_number") | list %}
 {% for d in ctx.decisions %}
-| `{{ d.issue_code }}` | {{ d.contract_number or "—" }} | {{ cell(d.decision) }} | {{ cell(d.rationale) }} |
+| `{{ cell(d.issue_code) }}` | {{ d.contract_number if d.contract_number in known else "—" }} | <!-- llm -->{{ cell(d.decision) }}<!-- /llm --> | <!-- llm -->{{ cell(d.rationale) }}<!-- /llm --> |
 {% endfor %}
 {% endif %}
 
