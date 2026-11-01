@@ -378,3 +378,35 @@ def check_not_redacted(quote: str | None, value: str | None) -> CheckResult:
     if (quote and is_redacted(quote)) or (value and is_redacted(value)):
         return _fail("redacted", "поле вымарано в источнике")
     return _ok("not_redacted")
+
+
+# The role a date plays is read from the words right before it: «вступает в силу с», «до», «к Договору № … от».
+_ROLE_CUT = re.compile(r"[«»\"“”„]")
+_REFERENCE_BEFORE = re.compile(r"\b(?:к|по|в|о\s+расторжении)\s+(?:договор\w*|соглашени\w*|контракт\w*)\b[^.;]{0,70}?\bот\s*$")
+_START_BEFORE = re.compile(r"(?:\bс|\bсо|вступ\w*\s+в\s+силу(?:\s+с)?)\s*[:—-]?\s*$")
+_START_CONTEXT = re.compile(r"вступ\w*\s+в\s+силу|распространя\w*|применя\w*\s+с\b|действ\w*\s+с\b")
+_END_BEFORE = re.compile(r"(?:\bдо|\bпо|окончани\w*|истечени\w*|срок\w*\s+действи\w*)\s*[:—-]?\s*$")
+DATE_ROLES = {"doc_date", "effective_from", "effective_to"}
+
+
+def check_date_role(field: str, value: str | None, quote: str | None) -> CheckResult:
+    """A date found in the quote must be there in the field's role: a signing date is not the date of the contract a
+    supplement refers to, an entry into force is a start (not an end, not a reference), an end date is an end."""
+    target = _as_date(value or "")
+    if field not in DATE_ROLES or target is None or not quote:
+        return _ok("date_role_unchecked")
+    windows = [" ".join(_ROLE_CUT.sub(" ", quote[max(0, start - 90):start]).casefold().split()) + " "
+               for d, start, _ in date_spans(quote) if d == target]
+    if not windows:
+        return _ok("date_role_unchecked")  # value_in_quote decides whether the date is there at all
+    if field == "doc_date":
+        fits = [w for w in windows if not (_REFERENCE_BEFORE.search(w) or _START_BEFORE.search(w) or _END_BEFORE.search(w))]
+        reason = "дата в цитате — не дата подписания этого документа (ссылка на другой договор или срок действия)"
+    elif field == "effective_from":
+        fits = [w for w in windows if not (_REFERENCE_BEFORE.search(w) or _END_BEFORE.search(w))
+                and (_START_BEFORE.search(w) or _START_CONTEXT.search(w))]
+        reason = "дата в цитате — не начало действия (окончание срока, ссылка или нет слов «вступает в силу», «с»)"
+    else:
+        fits = [w for w in windows if _END_BEFORE.search(w)]
+        reason = "дата в цитате — не окончание действия (нет слов «до», «по», «срок действия»)"
+    return _ok("date_role") if fits else _fail("date_role", reason)

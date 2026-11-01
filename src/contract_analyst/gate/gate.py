@@ -16,6 +16,7 @@ from contract_analyst.gate.checks import (
     CheckResult,
     ValueKind,
     _norm,
+    check_date_role,
     check_format,
     check_not_redacted,
     check_ocr_confidence,
@@ -120,6 +121,7 @@ def apply_gate(c: Candidate, doc: DocumentText, settings: Settings) -> Extracted
         found, spans = locate_quote(c.quote, page, settings.ocr_quote_fuzzy_threshold)
         yield found
         yield check_value_in_quote(c.value, c.quote, c.kind)
+        yield check_date_role(c.field, c.value, c.quote)
         yield check_format(c.value, c.kind)
         yield check_ocr_confidence(c.quote, page, threshold)
         yield check_value_on_page(c.value, c.kind, page, spans, threshold)

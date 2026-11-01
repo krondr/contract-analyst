@@ -305,3 +305,41 @@ def test_rate_reanchoring_with_several_candidates_is_conflict():
     doc = text_doc(["Ставки на 2026 год:\nТариф А 700\nСтавки на 2027 год:\nТариф А: 700 рублей"])
     r = gate_rate(RateOut(label="Тариф А", amount="700", page=1, quote="Ставки на 2026 год"), doc, load_settings())
     assert r.status == "conflict" and r.reason.startswith("reanchor_ambiguous")
+
+
+def test_effective_date_must_be_a_start_not_an_end():
+    quote = "Настоящее Соглашение вступает в силу с 01.01.2017 и действует до 31.12.2017"
+    doc, s = text_doc([quote + "."]), load_settings()
+
+    def eff(value):
+        return apply_gate(Candidate(field="effective_from", value=value, kind="date", page=1, quote=quote), doc, s)
+
+    assert eff("2017-01-01").status == "accepted"
+    wrong = eff("2017-12-31")
+    assert wrong.status == "rejected" and wrong.reason.startswith("date_role")
+
+
+def test_document_date_cannot_be_the_date_of_the_contract_it_refers_to():
+    s = load_settings()
+    doc = text_doc([("Дополнительное соглашение № D990000002-01\nк Договору № D990000001-01 от 02.06.2023\n"
+                     "г. Тверь 15.03.2024")])
+
+    def signed(value, quote, d=doc):
+        return apply_gate(Candidate(field="doc_date", value=value, kind="date", page=1, quote=quote), d, s)
+
+    ref = signed("2023-06-02", "к Договору № D990000001-01 от 02.06.2023")
+    assert ref.status == "rejected" and ref.reason.startswith("date_role")
+    assert signed("2024-03-15", "г. Тверь 15.03.2024").status == "accepted"
+    title = text_doc(["Договор № D990000001-01 от 02.06.2023"])
+    assert signed("2023-06-02", "Договор № D990000001-01 от 02.06.2023", title).status == "accepted"
+    both = "Дополнительное соглашение № D990000002-01 от 15.03.2024 к Договору № D990000001-01 от 02.06.2023"
+    two = text_doc([both])
+    assert signed("2024-03-15", both, two).status == "accepted"
+    assert signed("2023-06-02", both, two).status == "rejected"
+
+
+def test_effective_date_taken_from_a_reference_is_rejected():
+    doc = text_doc(["Изменения к Договору № D990000001-01 от 02.06.2023 вносятся настоящим Соглашением."])
+    r = apply_gate(Candidate(field="effective_from", value="2023-06-02", kind="date", page=1,
+                             quote="к Договору № D990000001-01 от 02.06.2023"), doc, load_settings())
+    assert r.status == "rejected" and r.reason.startswith("date_role")
