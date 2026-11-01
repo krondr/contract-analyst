@@ -1,0 +1,100 @@
+[
+ {
+  "spec": {
+   "name": "A",
+   "overrides": {},
+   "variant": "A"
+  },
+  "scores": {
+   "doc_kind_acc": 0.9375,
+   "chain_acc": 0.8,
+   "critical_total": 156,
+   "critical_accepted_correct": 66,
+   "critical_accepted_wrong": 40,
+   "critical_coverage": 0.4230769230769231,
+   "consolidation_acc": 0.13636363636363635,
+   "clusters_match": false,
+   "traps_passed": 31,
+   "traps_total": 44,
+   "wall_seconds": 2.2,
+   "llm_calls": 0,
+   "input_tokens": 0,
+   "output_tokens": 0,
+   "json_valid_rate": 1.0,
+   "tool_call_valid_rate": 1.0,
+   "safety_net": []
+  },
+  "run_dir": "runs/experiments/20261101-144614-A",
+  "runs_at": {
+   "2026-10-30": "runs/experiments/20261101-144614-A",
+   "2027-02-01": "runs/experiments/20261101-144616-A"
+  }
+ },
+ {
+  "spec": {
+   "name": "B",
+   "overrides": {},
+   "variant": "B"
+  },
+  "scores": {
+   "doc_kind_acc": 0.9375,
+   "chain_acc": 0.8,
+   "critical_total": 156,
+   "critical_accepted_correct": 66,
+   "critical_accepted_wrong": 40,
+   "critical_coverage": 0.4230769230769231,
+   "consolidation_acc": 0.13636363636363635,
+   "clusters_match": false,
+   "traps_passed": 31,
+   "traps_total": 44,
+   "wall_seconds": 7.4,
+   "llm_calls": 0,
+   "input_tokens": 0,
+   "output_tokens": 0,
+   "json_valid_rate": 1.0,
+   "tool_call_valid_rate": 1.0,
+   "safety_net": [
+    "analyze_docs",
+    "assemble_chains",
+    "consolidate_all",
+    "cluster_all"
+   ]
+  },
+  "run_dir": "runs/experiments/20261101-144703-B",
+  "runs_at": {
+   "2026-10-30": "runs/experiments/20261101-144703-B",
+   "2027-02-01": "runs/experiments/20261101-144711-B"
+  }
+ },
+ {
+  "spec": {
+   "name": "S",
+   "overrides": {},
+   "variant": "S"
+  },
+  "scores": {
+   "doc_kind_acc": 0.75,
+   "chain_acc": 0.4,
+   "critical_total": 156,
+   "critical_accepted_correct": 32,
+   "critical_accepted_wrong": 19,
+   "critical_coverage": 0.20512820512820512,
+   "consolidation_acc": 0.19318181818181818,
+   "clusters_match": false,
+   "traps_passed": 13,
+   "traps_total": 44,
+   "wall_seconds": 1212.8,
+   "llm_calls": 5,
+   "input_tokens": 63832,
+   "output_tokens": 4809,
+   "json_valid_rate": 1.0,
+   "tool_call_valid_rate": 1.0,
+   "safety_net": []
+  },
+  "run_dir": "runs/experiments/20261101-145423-S",
+  "runs_at": {
+   "2026-10-30": "runs/experiments/20261101-145423-S",
+   "2027-02-01": "runs/experiments/20261101-151436-S"
+  }
+ }
+]

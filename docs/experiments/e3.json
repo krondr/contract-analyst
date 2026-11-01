@@ -1,0 +1,76 @@
+[
+ {
+  "spec": {
+   "name": "code",
+   "overrides": {
+    "consolidation_mode": "code"
+   },
+   "variant": "B"
+  },
+  "scores": {
+   "doc_kind_acc": 0.9375,
+   "chain_acc": 0.8,
+   "critical_total": 156,
+   "critical_accepted_correct": 66,
+   "critical_accepted_wrong": 40,
+   "critical_coverage": 0.4230769230769231,
+   "consolidation_acc": 0.13636363636363635,
+   "clusters_match": false,
+   "traps_passed": 31,
+   "traps_total": 44,
+   "wall_seconds": 13.0,
+   "llm_calls": 0,
+   "input_tokens": 0,
+   "output_tokens": 0,
+   "json_valid_rate": 1.0,
+   "tool_call_valid_rate": 1.0,
+   "safety_net": [
+    "analyze_docs",
+    "assemble_chains",
+    "consolidate_all",
+    "cluster_all"
+   ]
+  },
+  "run_dir": "runs/experiments/20261101-154509-B",
+  "runs_at": {
+   "2026-10-30": "runs/experiments/20261101-154509-B",
+   "2027-02-01": "runs/experiments/20261101-154522-B"
+  }
+ },
+ {
+  "spec": {
+   "name": "llm",
+   "overrides": {
+    "consolidation_mode": "llm"
+   },
+   "variant": "B"
+  },
+  "scores": {
+   "doc_kind_acc": 0.9375,
+   "chain_acc": 0.8,
+   "critical_total": 156,
+   "critical_accepted_correct": 66,
+   "critical_accepted_wrong": 40,
+   "critical_coverage": 0.4230769230769231,
+   "consolidation_acc": 0.17045454545454544,
+   "clusters_match": false,
+   "traps_passed": 23,
+   "traps_total": 44,
+   "wall_seconds": 1949.6,
+   "llm_calls": 16,
+   "input_tokens": 33634,
+   "output_tokens": 10162,
+   "json_valid_rate": 0.8125,
+   "tool_call_valid_rate": 1.0,
+   "safety_net": [
+    "consolidate_all",
+    "cluster_all"
+   ]
+  },
+  "run_dir": "runs/experiments/20261101-154601-B",
+  "runs_at": {
+   "2026-10-30": "runs/experiments/20261101-154601-B",
+   "2027-02-01": "runs/experiments/20261101-161830-B"
+  }
+ }
+]
