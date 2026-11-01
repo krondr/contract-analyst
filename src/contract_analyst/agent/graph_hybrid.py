@@ -39,15 +39,20 @@ def reflect_checklist(ctx: RunContext) -> list[ReflectionItem]:
     refused = sum(1 for r in ctx.records.values() for v in [r.number, r.doc_date, r.parent, r.effective_from,
                                                             *r.terms.values(), *r.rates, *r.ops]
                   if v.status.value in ("rejected", "conflict", "redacted"))
+    stale = " — устарели: исходные данные изменились после сборки"
+    chains_stale, consolidated_stale = ctx.stale("chains"), ctx.stale("consolidated")
+    clusters_stale = ctx.stale("clusters")
     return [
         ReflectionItem(item=MANDATORY[0], ok=not missing,
                        note=f"не разобраны: {', '.join(missing)}" if missing
                        else f"разобрано {len(ctx.records)}, не обработано файлов: {len(ctx.unprocessed)}"),
-        ReflectionItem(item=MANDATORY[1], ok=bool(ctx.chains) or not ctx.records, note=f"цепочек: {len(ctx.chains)}"),
-        ReflectionItem(item=MANDATORY[2], ok=bool(ctx.chains) and not unconsolidated,
-                       note=f"без свёртки: {', '.join(unconsolidated)}" if unconsolidated else f"на {ctx.as_of}"),
-        ReflectionItem(item=MANDATORY[3], ok=bool(ctx.clusters) or not ctx.consolidated,
-                       note=f"кластеров: {len(ctx.clusters)}"),
+        ReflectionItem(item=MANDATORY[1], ok=not ctx.records or (bool(ctx.chains) and not chains_stale),
+                       note=f"цепочек: {len(ctx.chains)}" + (stale if ctx.chains and chains_stale else "")),
+        ReflectionItem(item=MANDATORY[2], ok=bool(ctx.chains) and not unconsolidated and not consolidated_stale,
+                       note=f"без свёртки: {', '.join(unconsolidated)}" if unconsolidated
+                       else f"на {ctx.as_of}" + (stale if consolidated_stale else "")),
+        ReflectionItem(item=MANDATORY[3], ok=not ctx.consolidated or (bool(ctx.clusters) and not clusters_stale),
+                       note=f"кластеров: {len(ctx.clusters)}" + (stale if ctx.clusters and clusters_stale else "")),
         ReflectionItem(item="Непроверенные значения не записаны в базу знаний", ok=True,
                        note=f"отклонено или спорно: {refused} — показаны в разделе 5"),
     ]
@@ -170,12 +175,14 @@ def complete_with_code(ctx: RunContext) -> None:
     if scope:
         steps.analyze_docs(ctx, scope)
         ctx.safety_net.append("analyze_docs")
-    if ctx.records and not ctx.chains or {r for r in ctx.records} - {d.doc_id for c in ctx.chains for d in c.docs}:
+    # Each part is redone when its inputs changed after it was built, so a rebuild cascades:
+    # new records -> chains -> consolidation -> clusters.
+    if ctx.records and ctx.stale("chains"):
         steps.assemble_chains(ctx)
         ctx.safety_net.append("assemble_chains")
-    if any(c.contract_number not in ctx.consolidated for c in ctx.chains):
+    if ctx.chains and ctx.stale("consolidated"):
         steps.consolidate_all(ctx)
         ctx.safety_net.append("consolidate_all")
-    if ctx.consolidated and not ctx.clusters:
+    if ctx.consolidated and ctx.stale("clusters"):
         steps.cluster_all(ctx)
         ctx.safety_net.append("cluster_all")

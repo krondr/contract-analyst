@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -21,6 +22,12 @@ from contract_analyst.models import (
 from contract_analyst.ocr import OcrEngine
 from contract_analyst.parsing.header import HeaderGuess
 from contract_analyst.report.render import ReflectionItem
+
+PARTS = ("documents", "records", "chains", "consolidated", "clusters", "decisions")
+# What each derived part is built from. A part built from older inputs is stale: the repeat guard lets the agent
+# rebuild it, and the safety net rebuilds it (and so, in turn, everything built from it) before the report.
+INPUTS = {"chains": ("records",), "consolidated": ("records", "chains"),
+          "clusters": ("records", "chains", "consolidated")}
 
 
 @dataclass
@@ -49,3 +56,17 @@ class RunContext:
     read_cache: Path | None = None
     report_path: Path | None = None
     removed_claims: int = 0
+    revision: Counter[str] = field(default_factory=Counter)  # per part of PARTS, bumped on every change
+    built_from: dict[str, tuple[int, ...]] = field(default_factory=dict)  # derived part -> revisions of its INPUTS
+
+    def changed(self, part: str) -> None:
+        self.revision[part] += 1
+
+    def revisions(self, parts: tuple[str, ...]) -> tuple[int, ...]:
+        return tuple(self.revision[p] for p in parts)
+
+    def built(self, part: str) -> None:
+        self.built_from[part] = self.revisions(INPUTS[part])
+
+    def stale(self, part: str) -> bool:
+        return self.built_from.get(part) != self.revisions(INPUTS[part])

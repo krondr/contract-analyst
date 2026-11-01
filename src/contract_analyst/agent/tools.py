@@ -12,7 +12,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
 
 from contract_analyst.agent import steps
-from contract_analyst.agent.context import RunContext
+from contract_analyst.agent.context import INPUTS, PARTS, RunContext
 from contract_analyst.agent.guards import Guard
 from contract_analyst.llm.client import ToolCall
 from contract_analyst.models import Decision, ToolResult
@@ -71,6 +71,7 @@ class ToolSpec:
     description: str
     args_model: type[ThoughtArgs]
     fn: Callable[[RunContext, ThoughtArgs], ToolResult]
+    reads: tuple[str, ...] = ()  # state parts the result depends on: a repeat counts only while they are unchanged
 
 
 def _list_inputs(ctx: RunContext) -> ToolResult:
@@ -84,26 +85,27 @@ def _list_inputs(ctx: RunContext) -> ToolResult:
 
 TOOLS: dict[str, ToolSpec] = {spec.name: spec for spec in [
     ToolSpec("list_inputs", "Опись входных файлов: формат, способ чтения страниц, найденные номера, качество.",
-             ListInputsArgs, lambda ctx, a: _list_inputs(ctx)),
+             ListInputsArgs, lambda ctx, a: _list_inputs(ctx), ("documents",)),
     ToolSpec("read_document", "Прочитать файл (текстовый слой или OCR) — для файла, которого ещё нет в описи.",
              ReadDocumentArgs, lambda ctx, a: steps.read_one(ctx, a.file_name)),
     ToolSpec("rerecognize", "Перераспознать страницы скана другими настройками, если уверенность OCR низкая.",
              RerecognizeArgs, lambda ctx, a: steps.rerecognize(ctx, a.doc_id, a.pages, a.strategy)),
     ToolSpec("analyze_document", "Разобрать документ: вид, реквизиты, условия, ставки, операции изменения. "
              "Значения проходят шлюз проверок.", AnalyzeDocumentArgs,
-             lambda ctx, a: steps.analyze_docs(ctx, [a.doc_id], a.groups)),
+             lambda ctx, a: steps.analyze_docs(ctx, [a.doc_id], a.groups), ("documents",)),
     ToolSpec("build_chains", "Собрать цепочки договоров из разобранных документов: порядок, отмены, конфликты.",
-             BuildChainsArgs, lambda ctx, a: steps.assemble_chains(ctx)),
+             BuildChainsArgs, lambda ctx, a: steps.assemble_chains(ctx), INPUTS["chains"]),
     ToolSpec("consolidate", "Свернуть действующие условия договора на дату с учётом допсоглашений.",
-             ConsolidateArgs, lambda ctx, a: steps.consolidate_all(ctx, a.contract_number, a.as_of)),
+             ConsolidateArgs, lambda ctx, a: steps.consolidate_all(ctx, a.contract_number, a.as_of),
+             INPUTS["consolidated"]),
     ToolSpec("cluster_and_compare", "Кластеризовать договоры по предмету и сравнить договоры внутри кластера.",
-             ClusterArgs, lambda ctx, a: steps.cluster_all(ctx)),
+             ClusterArgs, lambda ctx, a: steps.cluster_all(ctx), INPUTS["clusters"]),
     ToolSpec("record_decision", "Записать твоё решение по противоречию (оно попадёт в отчёт).", RecordDecisionArgs,
              lambda ctx, a: steps.record_decision(ctx, Decision(issue_code=a.issue_code,
                                                                 contract_number=a.contract_number,
                                                                 decision=a.decision, rationale=a.rationale))),
     ToolSpec("write_report", "Собрать итоговый отчёт. Вызывай последним.", WriteReportArgs,
-             lambda ctx, a: steps.write_report(ctx)),
+             lambda ctx, a: steps.write_report(ctx), PARTS),
 ]}
 
 
@@ -150,11 +152,12 @@ def dispatch(ctx: RunContext, call: ToolCall, guard: Guard, node: str = "tools",
         return ToolResult(status="error", error_type="bad_args", hint=f"Неверные аргументы: {str(exc)[:300]}")
     thought, source = _thought(args, message_text, reasoning)
     ctx.trace.event("thought", node, tool=call.name, thought=thought, thought_source=source)
-    key = (call.name, json.dumps(args.model_dump(exclude={"thought"}), sort_keys=True, default=str))
+    args_key = json.dumps(args.model_dump(exclude={"thought"}), sort_keys=True, default=str)
     guard.steps += 1
-    if guard.seen(key):
+    if guard.seen((call.name, args_key, ctx.revisions(spec.reads))):
         result = ToolResult(status="error", error_type="repeat_call",
-                            hint="Этот вызов уже был: смени аргументы или переходи к следующему шагу")
+                            hint="Этот вызов уже был, и данные с тех пор не менялись: смени аргументы "
+                                 "или переходи к следующему шагу")
     else:
         ctx.trace.event("tool_call", node, tool=call.name, thought=thought, thought_source=source,
                         args=args.model_dump(exclude={"thought"}, mode="json"))
@@ -163,6 +166,8 @@ def dispatch(ctx: RunContext, call: ToolCall, guard: Guard, node: str = "tools",
         except Exception as exc:  # noqa: BLE001 — a failing tool must become an observation, not a crash
             ctx.trace.event("error", node, tool=call.name, message=f"{type(exc).__name__}: {exc}"[:300])
             result = ToolResult(status="error", error_type="exception", hint=f"{type(exc).__name__}: {exc}"[:300])
+        # What the call changed itself (list_inputs reading the files) does not make the same call new.
+        guard.seen((call.name, args_key, ctx.revisions(spec.reads)))
     ctx.trace.event("tool_result", node, tool=call.name, status=result.status, error_type=result.error_type,
                     data=json.dumps(result.data, ensure_ascii=False, default=str)[:500])
     return result

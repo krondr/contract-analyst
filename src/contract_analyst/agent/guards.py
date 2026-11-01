@@ -12,7 +12,7 @@ class Guard:
         self.max_steps, self.max_seconds = max_steps, max_seconds
         self.steps = 0
         self.started = time.monotonic()
-        self._seen: set[tuple[str, str]] = set()
+        self._seen: set[tuple] = set()
 
     def check_budget(self) -> ToolResult | None:
         if self.steps >= self.max_steps:
@@ -23,7 +23,8 @@ class Guard:
                               hint=f"Лимит времени ({self.max_seconds} с) исчерпан: заверши работу и переходи к отчёту")
         return None
 
-    def seen(self, key: tuple[str, str]) -> bool:
+    def seen(self, key: tuple) -> bool:
+        """Whether the key was seen before; it is remembered either way."""
         if key in self._seen:
             return True
         self._seen.add(key)

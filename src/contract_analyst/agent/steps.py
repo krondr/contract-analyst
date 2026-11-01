@@ -72,6 +72,7 @@ def _register(ctx: RunContext, doc: DocumentText) -> None:
     else:
         ctx.documents[doc.doc_id] = doc
         ctx.headers[doc.doc_id] = parse_header(doc.pages[0].text if doc.pages else "")
+        ctx.changed("documents")
 
 
 def resolve_doc_id(ctx: RunContext, ref: str) -> str | None:
@@ -156,6 +157,7 @@ def rerecognize(ctx: RunContext, doc_id: str, pages: list[int], strategy: str) -
         improved = improved or after > before
     if improved:
         ctx.documents[doc_id] = better
+        ctx.changed("documents")
     status = "ok" if (better if improved else doc).status == "ok" else "low_quality"
     return ToolResult(status=status, data=fit({"doc_id": doc_id, "strategy": strategy, "pages": report,
                                                "adopted": improved}),
@@ -202,7 +204,9 @@ def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None =
                 ctx.trace.event("error", "tools", doc_id=doc_id, message=f"{issue.code}: {issue.message}")
         if groups and doc_id in ctx.records:
             record = _merge_records(ctx.records[doc_id], record, groups)
-        ctx.records[doc_id] = record
+        if ctx.records.get(doc_id) != record:
+            ctx.records[doc_id] = record
+            ctx.changed("records")
         rejected = [r for r in [*record.rates, *record.ops] if r.status == ValueStatus.REJECTED]
         if rejected:
             ctx.trace.event("gate_reject", "tools", doc_id=doc_id, count=len(rejected),
@@ -216,7 +220,11 @@ def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None =
 
 
 def assemble_chains(ctx: RunContext) -> ToolResult:
-    ctx.chains = build_chains(list(ctx.records.values()))
+    chains = build_chains(list(ctx.records.values()))
+    ctx.built("chains")
+    if chains != ctx.chains:
+        ctx.chains = chains
+        ctx.changed("chains")
     return ToolResult(status="ok" if ctx.chains else "empty", data=fit({"chains": [
         {"contract": c.contract_number, "documents": len(c.docs), "has_main": c.main_doc_id is not None,
          "issues": sorted({i.code for i in c.issues})} for c in ctx.chains]}))
@@ -224,7 +232,7 @@ def assemble_chains(ctx: RunContext) -> ToolResult:
 
 def consolidate_all(ctx: RunContext, contract_number: str | None = None, as_of: date | None = None) -> ToolResult:
     when = as_of or ctx.as_of
-    out = []
+    out, results = [], {}
     for chain in ctx.chains:
         if contract_number and chain.contract_number != contract_number:
             continue
@@ -234,26 +242,38 @@ def consolidate_all(ctx: RunContext, contract_number: str | None = None, as_of: 
             result = consolidate_llm(chain, ctx.records, when, ctx.client)
         else:
             result = consolidate(chain, ctx.records, when)
-        if when == ctx.as_of:
-            ctx.consolidated[chain.contract_number] = result
+        results[chain.contract_number] = result
         out.append({"contract": chain.contract_number, "status": result.status, "since": result.status_since,
                     "terms": len(result.terms), "rates": len(result.rates), "planned_rates": len(result.planned_rates)})
+    if when == ctx.as_of:
+        # A full run replaces the set, so contracts whose chain is gone do not linger.
+        merged = {**ctx.consolidated, **results} if contract_number else results
+        if merged != ctx.consolidated:
+            ctx.consolidated = merged
+            ctx.changed("consolidated")
+        if not contract_number:
+            ctx.built("consolidated")
     return ToolResult(status="ok" if out else "empty", data=fit({"as_of": when, "contracts": out}))
 
 
 def cluster_all(ctx: RunContext) -> ToolResult:
-    ctx.clusters = cluster_contracts(list(ctx.consolidated.values()), ctx.records, ctx.chains, ctx.settings)
-    for cluster in ctx.clusters:
+    clusters = cluster_contracts(list(ctx.consolidated.values()), ctx.records, ctx.chains, ctx.settings)
+    for cluster in clusters:
         try:
             cluster.summary = summarize_cluster(cluster, ctx.consolidated, ctx.client)
         except (TimeoutError, httpx.TimeoutException):
             cluster.summary = None
+    ctx.built("clusters")
+    if clusters != ctx.clusters:
+        ctx.clusters = clusters
+        ctx.changed("clusters")
     return ToolResult(status="ok" if ctx.clusters else "empty", data=fit({"clusters": [
         {"label": c.label, "members": c.members, "differences": len(c.differences)} for c in ctx.clusters]}))
 
 
 def record_decision(ctx: RunContext, decision: Decision) -> ToolResult:
     ctx.decisions.append(decision)
+    ctx.changed("decisions")
     return ToolResult(status="ok", data={"decisions": len(ctx.decisions)})
 
 
