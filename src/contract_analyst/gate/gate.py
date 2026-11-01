@@ -184,8 +184,10 @@ def _reanchor(row: RateOut, amount: Decimal, doc: DocumentText) -> list[str]:
 
 
 _VAT_SAID = {
-    "excluded": re.compile(r"без\s+(?:учёта\s+|учета\s+)?ндс|ндс\s+не\s+облага|не\s+облага\w*\s+ндс"),
-    "included": re.compile(r"(?:с\s+учётом|с\s+учетом|включая|в\s+т\.\s*ч\.|в\s+том\s+числе)\s+ндс|\bс\s+ндс|ндс\s+включ"),
+    "excluded": re.compile(r"без\s+(?:учёта\s+|учета\s+)?ндс|ндс\s+не\s+облага|не\s+облага\w*\s+ндс"
+                           r"|\bне\s+включая\s+ндс|ндс\s+не\s+включ"),
+    "included": re.compile(r"(?:с\s+учётом|с\s+учетом|(?<!\bне\s)включая|в\s+т\.\s*ч\.|в\s+том\s+числе)\s+ндс"
+                           r"|\bс\s+ндс|ндс\s+включ"),
 }
 _VAT_CONTEXT = 400  # characters above the row: the table header that states VAT for its rows
 

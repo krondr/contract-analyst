@@ -528,3 +528,14 @@ def test_permissive_words_count_only_outside_the_quoted_new_wording(operation, w
     r = gate_op(OpOut(op="replace_clause", target="7.2", page=1, quote=operation), text_doc([text]), load_settings())
     assert (r.status == "accepted") is accepted, r.reason
     assert accepted or r.reason.startswith("not_operative")
+
+
+@pytest.mark.parametrize(("sentence", "vat"), [
+    ("Арендная плата составляет 120 000 рублей в месяц, не включая НДС", "excluded"),
+    ("Арендная плата составляет 120 000 рублей в месяц, НДС не включён", "excluded"),
+    ("Арендная плата составляет 120 000 рублей в месяц, включая НДС", "included"),
+    ("Арендная плата составляет 120 000 рублей в месяц по фиксированной цене включая НДС", "included")])
+def test_vat_not_included_is_read_as_excluded(sentence, vat):
+    r = gate_rate(RateOut(label="Арендная плата", amount="120 000", vat="excluded", page=1, quote=sentence),
+                  text_doc([f"3.1. {sentence}."]), load_settings())
+    assert (r.status, r.vat) == ("accepted", vat)
