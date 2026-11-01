@@ -1,5 +1,5 @@
-# Defaults for contract-analyst. Values marked "E1/E2/E3/E4" are set from experiment winners.
-llm_model: "ollama:qwen3:8b"          # E2
+# Defaults for contract-analyst. Values marked E1/E3/E4 are set from experiment winners; the model is the caller's choice.
+llm_model: "ollama:qwen3:8b"          # default; any ollama:<model> or openai:<model>
 ollama_url: "http://localhost:11434"   # overridden by CA_OLLAMA_URL; a non-loopback host needs CA_ALLOW_REMOTE_LLM=1
 openai_base_url: "http://localhost:8000/v1"  # for llm_model openai:<model> (vLLM, LM Studio, ...); CA_OPENAI_BASE_URL, key in CA_OPENAI_API_KEY
 # Server-specific request fields for openai:<model>: switch a reasoning model's thinking off for extraction and on
