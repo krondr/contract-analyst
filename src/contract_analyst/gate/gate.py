@@ -24,6 +24,7 @@ from contract_analyst.gate.checks import (
     check_operative_wording,
     check_parent_role,
     check_period_near,
+    check_target_named,
     check_value_in_quote,
     check_value_on_page,
     locate_quote,
@@ -183,8 +184,10 @@ def _reanchor(row: RateOut, amount: Decimal, doc: DocumentText) -> list[str]:
 
 
 _VAT_SAID = {
-    "excluded": re.compile(r"без\s+(?:учёта\s+|учета\s+)?ндс|ндс\s+не\s+облага|не\s+облага\w*\s+ндс"),
-    "included": re.compile(r"(?:с\s+учётом|с\s+учетом|включая|в\s+т\.\s*ч\.|в\s+том\s+числе)\s+ндс|\bс\s+ндс|ндс\s+включ"),
+    "excluded": re.compile(r"без\s+(?:учёта\s+|учета\s+)?ндс|ндс\s+не\s+облага|не\s+облага\w*\s+ндс"
+                           r"|\bне\s+включая\s+ндс|ндс\s+не\s+включ"),
+    "included": re.compile(r"(?:с\s+учётом|с\s+учетом|(?<!\bне\s)включая|в\s+т\.\s*ч\.|в\s+том\s+числе)\s+ндс"
+                           r"|\bс\s+ндс|ндс\s+включ"),
 }
 _VAT_CONTEXT = 400  # characters above the row: the table header that states VAT for its rows
 
@@ -199,6 +202,7 @@ def _vat_said(quote: str, page: Page) -> set[str]:
 
 _PENALTY = re.compile(r"штраф|пен[яиь]|неустойк", re.IGNORECASE)
 _PRICE = re.compile(r"вознагражд|ставк|цен[аы]|стоимост|плат[аы]|тариф|оплат", re.IGNORECASE)
+_PERCENT_AFTER = r"\s*(?:\([^)]{0,80}\)\s*)?(?:%|процент)"  # «60%», «60 (шестьдесят) процентов»
 
 
 def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
@@ -210,7 +214,7 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
             row = row.model_copy(update={"quote": places[0]})
     valid_from, valid_to = _iso(row.valid_from), _iso(row.valid_to)
     percent = "%" in row.amount or bool(amount is not None and re.search(
-        rf"(?<![\d,.]){re.escape(row.amount.strip().rstrip('%').strip())}\s*(?:%|процент)", row.quote or ""))
+        rf"(?<![\d,.]){re.escape(row.amount.strip().rstrip('%').strip())}{_PERCENT_AFTER}", row.quote or ""))
     base = {"label": row.label, "amount": amount if amount is not None else 0, "vat": row.vat,
             "unit": "%" if percent else "RUB",
                 "valid_from": valid_from if isinstance(valid_from, date) else None,
@@ -279,6 +283,8 @@ def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
         if op.op in _NEEDS_TARGET and not (op.target or "").strip():
             yield CheckResult(ok=False, code="no_target",
                               reason="не указано, какой пункт, раздел или приложение меняет операция")
+        if op.op in _NEEDS_TARGET:
+            yield check_target_named(op.target, page, spans, base["source"].clause_id)
         yield check_ocr_confidence(op.quote, page, threshold)
         if op.op == OpType.INVALIDATE_DOCUMENT:
             yield check_value_in_quote(op.target or "", op.quote, "doc_number")

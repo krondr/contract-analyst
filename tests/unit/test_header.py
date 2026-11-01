@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from contract_analyst.parsing.header import detect_draft, parse_header
 
 
@@ -45,3 +47,10 @@ def test_header_title_with_adjective_and_termination_parent():
     assert (h.title_kind, h.number) == ("contract", "D990300001-01")
     s = parse_header("Соглашение № D990200002-01\nо расторжении Договора оказания услуг № D990200001-01 от 15.02.2023")
     assert (s.parent_number, s.parent_date) == ("D990200001-01", date(2023, 2, 15))
+
+
+@pytest.mark.parametrize("adjective", ["Агентскому", "Дилерскому", "Лицензионному", "Партнёрскому"])
+def test_header_parent_contract_named_with_an_adjective(adjective):
+    h = parse_header(f"ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № D990000002-01\nк {adjective} договору № D990000001-01 от 10.01.2024 г.\n"
+                     "г. Тверь 15.10.2026 г.")
+    assert (h.parent_number, h.parent_date) == ("D990000001-01", date(2024, 1, 10))

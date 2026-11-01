@@ -15,7 +15,9 @@ _TITLE_RE = re.compile(r"^\s*(?:(?!дополнительн)[А-ЯЁа-яё-]+(?
                        re.IGNORECASE)
 _TITLE_KIND = {"дополнительное": "supplement", "соглашение": "agreement", "договор": "contract"}
 _CITY_RE = re.compile(r"^\s*г\.\s*([А-ЯЁ][а-яё-]+)")
-_PARENT_ANCHOR_RE = re.compile(r"\b(?:к|в|о\s+расторжении)\s+(?:договор\w*|соглашени\w*)", re.IGNORECASE)
+# «к Агентскому договору»: up to two adjectives between the preposition and the noun.
+_PARENT_ANCHOR_RE = re.compile(r"\b(?:к|в|о\s+расторжении)\s+(?:[а-яё-]+(?:ому|ему|ой|ым)\s+){0,2}"
+                               r"(?:договор\w*|соглашени\w*)", re.IGNORECASE)
 _DRAFT_LINE_RE = re.compile(r"^\s*проект(?:\s+договора)?\s*[.:]?\s*$", re.IGNORECASE)
 _DRAFT_NAME_RE = re.compile(r"(?<![а-яё])проект(?![а-яё])")
 _HEADER_LINES = 15

@@ -25,6 +25,7 @@ from contract_analyst.parsing.patterns import (
     find_numbers,
     number_readings,
 )
+from contract_analyst.understand.routing import _quoted
 
 ValueKind = Literal["date", "number", "money", "doc_number", "text"]
 Span = tuple[int, int]  # offsets in normalize_text(page.text)
@@ -51,7 +52,8 @@ _OPERATIVE = {
     OpType.REPLACE_CLAUSE: [r"излож\w*|излага\w*|читать|замени\w*|редакци"],
     OpType.RESTATE_SECTION: [r"излож\w*|излага\w*|читать|замени\w*|редакци"],
     OpType.REPLACE_APPENDIX: [r"излож\w*|излага\w*|читать|замени\w*|редакци"],
-    OpType.ADD_CLAUSE: [r"дополни\w*|дополня\w*|добави\w*|включи\w*"],
+    # «Дополнительное соглашение» and «включительно» do not add anything.
+    OpType.ADD_CLAUSE: [r"дополни(?!тельн)\w*|дополня\w*|добави\w*|включи(?!тельн)\w*"],
     OpType.DELETE_CLAUSE: [r"исключи\w*|исключа\w*|утративш\w*\s+силу|утрачива\w*\s+силу|удали\w*"],
 }
 _PERMISSIVE = re.compile(r"\bмо(?:жет|гут)\b|\bвправе\b|\bиме(?:ет|ют)\s+право\b|\bв\s+случа(?:е|ях)\b"
@@ -337,19 +339,54 @@ def _says(pattern: str, text: str) -> bool:
     return any(not _NEGATED.search(text, 0, m.start()) for m in re.finditer(pattern, text, re.IGNORECASE))
 
 
+def _unquoted(text: str) -> str:
+    """The text with every «…» blanked out, offsets kept."""
+    for a, b in _quoted(text):
+        text = text[:a] + " " * (b + 1 - a) + text[b + 1:]
+    return text
+
+
 def check_operative_wording(op: OpType, page: Page, spans: list[Span]) -> CheckResult:
     """The sentence quoted for an operation must carry it out: its own verb, not a possibility or a condition.
-    Termination, suspension and restatement change everything after them; a clause operation changes the fold."""
+    Termination, suspension and restatement change everything after them; a clause operation changes the fold.
+    A condition inside the quoted new wording («…вправе…, если…») belongs to that wording, not to the operation."""
     patterns = _OPERATIVE.get(op)
     if not patterns:
         return _ok("operative")
     source = normalize_text(page.text)
+    unquoted = _unquoted(source)
     for a, b in spans:
-        sentence = source[slice(*sentence_around(source, a, b))]
-        if all(_says(p, sentence) for p in patterns) and not _PERMISSIVE.search(sentence):
+        sentence = slice(*sentence_around(source, a, b))
+        if all(_says(p, source[sentence]) for p in patterns) and not _PERMISSIVE.search(unquoted[sentence]):
             return _ok("operative")
     return _fail("not_operative", f"в цитируемом предложении нет действующей формулировки для «{op.value}»: "
                                   "только возможность или условие")
+
+
+_APPENDIX_NAMED = re.compile(r"приложени\w*\s*(?:№\s*)?(\d+)", re.IGNORECASE)
+_CLAUSE_NAMED = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3})*(?!\d)")
+
+
+def _named(text: str) -> tuple[set[str], set[str]]:
+    """Appendix and clause numbers a text names: «пункт 1.6 Приложения № 1» → {"1"}, {"1.6"}."""
+    text = _OCR_NUMBER_RE.sub(" ", text)
+    return {m[1] for m in _APPENDIX_NAMED.finditer(text)}, set(_CLAUSE_NAMED.findall(_APPENDIX_NAMED.sub(" ", text)))
+
+
+def check_target_named(target: str, page: Page, spans: list[Span], clause: str | None) -> CheckResult:
+    """The clause or appendix an operation changes must be named in its sentence or be the clause the sentence stands
+    in («Приложение 1/1.6»): the fold applies the change to the target, so the text has to back it."""
+    appendices, clauses = _named(target)
+    if not appendices and not clauses:
+        return _ok("target_unchecked")
+    source = normalize_text(page.text)
+    clause_appendices, clause_numbers = _named(clause or "")
+    for a, b in spans:
+        said_appendices, said_numbers = _named(source[slice(*sentence_around(source, a, b))])
+        if appendices <= said_appendices | clause_appendices and clauses <= said_numbers | clause_numbers:
+            return _ok("target_named")
+    return _fail("target_not_named", f"«{target}» не назван в предложении с операцией на странице {page.number} "
+                                     "и не совпадает с пунктом, в котором оно стоит")
 
 
 def check_format(value: str, kind: ValueKind) -> CheckResult:
@@ -389,19 +426,23 @@ def check_not_redacted(quote: str | None, value: str | None) -> CheckResult:
 
 # The role a date plays is read from the words right before it: «вступает в силу с», «до», «к Договору № … от».
 _ROLE_CUT = re.compile(r"[«»\"“”„]")
-_REFERENCE_BEFORE = re.compile(r"\b(?:к|по|в|о\s+расторжении)\s+(?:договор\w*|соглашени\w*|контракт\w*)\b[^.;]{0,70}?\bот\s*$")
+# «к Агентскому договору» names another contract; «к настоящему Соглашению» names the document itself.
+_ADJECTIVES = r"(?:(?!настоящ)[а-яё-]+(?:ому|ему|ой|ым)\s+){0,2}"
+_REFERENCE_BEFORE = re.compile(rf"\b(?:к|по|в|о\s+расторжении)\s+{_ADJECTIVES}(?:договор\w*|соглашени\w*|контракт\w*)\b"
+                               r"[^.;]{0,70}?\bот\s*$")
 _START_BEFORE = re.compile(r"(?:\bс|\bсо|вступ\w*\s+в\s+силу(?:\s+с)?)\s*[:—-]?\s*$")
 _START_CONTEXT = re.compile(r"вступ\w*\s+в\s+силу|распространя\w*|применя\w*\s+с\b|действ\w*\s+с\b")
 _END_BEFORE = re.compile(r"(?:\bдо|\bпо|окончани\w*|истечени\w*|срок\w*\s+действи\w*)\s*[:—-]?\s*$")
 DATE_ROLES = {"doc_date", "effective_from", "effective_to"}
-_OPERATION_VERB = re.compile(r"расторг\w*|прекра[тщ]\w*|приостан\w*|излож\w*|исключ\w*|дополн\w*|отмен\w*")
+# «Дополнительное соглашение действует с», «условия, изложенные в Соглашении» name the document, not an operation.
+_OPERATION_VERB = re.compile(r"расторг\w*|прекра[тщ]\w*|приостан\w*|излож(?!енн)\w*|исключ\w*|дополн(?!ительн)\w*|отмен\w*")
 _IN_FORCE_CUE = re.compile(r"вступ\w*\s+в\s+силу|распространя\w*")
 
 
 # A supplement belongs to the contract it is «к», «в», «о расторжении» of; a definition that only names another
 # contract («ДКП – Договор …, заключенный … № …») is a mention, not a parent.
 _PARENT_ANCHOR = re.compile(r"\b(?:к|в|во|о\s+расторжении|о\s+внесении\s+изменений\s+в)\s+(?:настоящ\w+\s+)?"
-                            r"(?:договор\w*|соглашени\w*|контракт\w*)", re.IGNORECASE)
+                            rf"{_ADJECTIVES}(?:договор\w*|соглашени\w*|контракт\w*)", re.IGNORECASE)
 
 
 def check_parent_role(field: str, value: str | None, quote: str | None) -> CheckResult:

@@ -442,3 +442,110 @@ def test_percent_rate_keeps_its_unit():
     rub = gate_rate(RateOut(label="Ставка", amount="500", page=1, quote="Ставка 500 рублей"),
                     text_doc(["Ставка 500 рублей."]), load_settings())
     assert rub.unit == "RUB"
+
+
+@pytest.mark.parametrize("adjective", ["Агентскому", "Дилерскому", "Лицензионному", "Партнёрскому"])
+def test_parent_contract_named_with_an_adjective_is_the_parent(adjective):
+    reference = f"к {adjective} договору № D990000001-01 от 10.01.2024 г."
+    doc = text_doc([f"Дополнительное соглашение № D990000002-01\n{reference}\nг. Тверь 15.10.2026 г."])
+    r = apply_gate(Candidate(field="parent_number", value="D990000001-01", kind="doc_number", page=1, quote=reference),
+                   doc, load_settings())
+    assert r.status == "accepted", r.reason
+
+
+@pytest.mark.parametrize("adjective", ["Агентскому", "Дилерскому", "Лицензионному", "Партнёрскому"])
+def test_date_of_a_parent_named_with_an_adjective_is_not_the_signing_date(adjective):
+    title = f"Дополнительное соглашение № D990000002-01 к {adjective} договору № D990000001-01 от 10.01.2024 г."
+    r = apply_gate(Candidate(field="doc_date", value="2024-01-10", kind="date", page=1, quote=title),
+                   text_doc([title + "\nг. Тверь 15.10.2026 г."]), load_settings())
+    assert r.status == "rejected" and r.reason.startswith("date_role")
+
+
+def test_document_date_after_a_reference_to_the_document_itself_is_accepted():
+    quote = "Приложение № 1 к настоящему Соглашению № D990000002-01 от 15.10.2026"
+    r = apply_gate(Candidate(field="doc_date", value="2026-10-15", kind="date", page=1, quote=quote),
+                   text_doc([quote + "\nСтавки вознаграждения"]), load_settings())
+    assert r.status == "accepted", r.reason
+
+
+@pytest.mark.parametrize(("quote", "accepted"), [
+    ("Настоящее Дополнительное соглашение действует с 01.07.2026", True),
+    ("Условия настоящего Дополнительного соглашения применяются с 01.07.2026", True),
+    ("Условия, изложенные в настоящем Соглашении, применяются с 01.07.2026", True),
+    ("Дополнить Договор пунктом 5.4 с 01.07.2026", False),
+    ("Пункт 3.1 Договора изложить в следующей редакции с 01.07.2026", False)])
+def test_entry_into_force_is_told_from_an_operation_by_its_verb(quote, accepted):
+    r = apply_gate(Candidate(field="effective_from", value="2026-07-01", kind="date", page=1, quote=quote),
+                   text_doc([f"5. {quote}."]), load_settings())
+    assert (r.status == "accepted") is accepted, r.reason
+    assert accepted or r.reason.startswith("date_role")
+
+
+@pytest.mark.parametrize(("text", "accepted"), [
+    ("1. Дополнить Договор пунктом 5.4 следующего содержания.", True),
+    ("1. Включить в Договор пункт 5.4 следующего содержания.", True),
+    ("1. Пункт 5.4 Договора действует по 31.12.2026 включительно.", False),
+    ("1. Пункт 5.4 Договора применяется в редакции Дополнительного соглашения № 1.", False)])
+def test_add_clause_needs_a_verb_that_adds(text, accepted):
+    quote = text.split(". ", 1)[1].rstrip(".")
+    r = gate_op(OpOut(op="add_clause", target="5.4", page=1, quote=quote), text_doc([text]), load_settings())
+    assert (r.status == "accepted") is accepted, r.reason
+    assert accepted or r.reason.startswith("not_operative")
+
+
+_REWRITE_3_1 = "1. Пункт 3.1 Договора изложить в следующей редакции: «3.1. Ставка составляет 700 рублей»."
+_REWRITE_1_6 = "1. Пункт 1.6 Приложения № 1 к Договору изложить в следующей редакции."
+
+
+@pytest.mark.parametrize(("op", "text", "quote", "target", "accepted"), [
+    ("replace_clause", _REWRITE_3_1, "Пункт 3.1 Договора изложить в следующей редакции", "9.4", False),
+    ("replace_clause", _REWRITE_3_1, "Пункт 3.1 Договора изложить в следующей редакции", "3.1", True),
+    ("replace_clause", _REWRITE_1_6, "Пункт 1.6 Приложения № 1 к Договору изложить в следующей редакции",
+     "Приложение 2/1.6", False),
+    ("replace_clause", _REWRITE_1_6, "Пункт 1.6 Приложения № 1 к Договору изложить в следующей редакции",
+     "Приложение 1/1.6", True),
+    # Only the clause the sentence stands in names the target: a clause heading in that appendix.
+    ("replace_clause", "Приложение № 1\n1.6. Вознаграждение Агента пересматривается. Изложить пункт в следующей редакции.",
+     "Изложить пункт в следующей редакции", "Приложение 1/1.6", True),
+    ("replace_appendix", "1. Приложение № 7 к Договору изложить в редакции Приложения № 1 к настоящему Соглашению.",
+     "Приложение № 7 к Договору изложить в редакции Приложения № 1 к настоящему Соглашению", "Приложение 7", True)])
+def test_clause_operation_target_must_be_named_by_its_sentence_or_clause(op, text, quote, target, accepted):
+    r = gate_op(OpOut(op=op, target=target, page=1, quote=quote), text_doc([text]), load_settings())
+    assert (r.status == "accepted") is accepted, r.reason
+    assert accepted or r.reason.startswith("target_not_named")
+
+
+_REWRITE_7_2 = "Пункт 7.2 Договора изложить в следующей редакции"
+
+
+@pytest.mark.parametrize(("operation", "wording", "accepted"), [
+    (_REWRITE_7_2, "Арендатор вправе расторгнуть Договор, если Арендодатель нарушит срок передачи", True),
+    (_REWRITE_7_2, "В случае просрочки оплаты Арендатор уплачивает пени", True),
+    (_REWRITE_7_2, "Арендатор вправе отказаться от Договора. Уведомление направляется за 30 дней", True),
+    ("Стороны вправе изложить пункт 7.2 Договора в следующей редакции", "Арендная плата вносится ежемесячно", False)])
+def test_permissive_words_count_only_outside_the_quoted_new_wording(operation, wording, accepted):
+    text = f"1. {operation}: «7.2. {wording}»."
+    r = gate_op(OpOut(op="replace_clause", target="7.2", page=1, quote=operation), text_doc([text]), load_settings())
+    assert (r.status == "accepted") is accepted, r.reason
+    assert accepted or r.reason.startswith("not_operative")
+
+
+@pytest.mark.parametrize(("sentence", "vat"), [
+    ("Арендная плата составляет 120 000 рублей в месяц, не включая НДС", "excluded"),
+    ("Арендная плата составляет 120 000 рублей в месяц, НДС не включён", "excluded"),
+    ("Арендная плата составляет 120 000 рублей в месяц, включая НДС", "included"),
+    ("Арендная плата составляет 120 000 рублей в месяц по фиксированной цене включая НДС", "included")])
+def test_vat_not_included_is_read_as_excluded(sentence, vat):
+    r = gate_rate(RateOut(label="Арендная плата", amount="120 000", vat="excluded", page=1, quote=sentence),
+                  text_doc([f"3.1. {sentence}."]), load_settings())
+    assert (r.status, r.vat) == ("accepted", vat)
+
+
+@pytest.mark.parametrize(("sentence", "amount", "unit"), [
+    ("Вознаграждение Агента составляет 60 (шестьдесят) процентов от суммы платежей", "60", "%"),
+    ("Вознаграждение Агента составляет 60 (шестьдесят) % от суммы платежей", "60", "%"),
+    ("Вознаграждение Агента составляет 1 500 (одна тысяча пятьсот) рублей за абонента", "1 500", "RUB")])
+def test_percent_written_with_the_amount_in_words_keeps_its_unit(sentence, amount, unit):
+    r = gate_rate(RateOut(label="Вознаграждение Агента", amount=amount, page=1, quote=sentence),
+                  text_doc([f"4.1. {sentence}."]), load_settings())
+    assert (r.status, r.unit) == ("accepted", unit)
