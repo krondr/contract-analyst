@@ -164,3 +164,10 @@ def test_calls_without_any_thought_lower_the_coverage(tmp_path, fixtures_package
     r = run(fixtures_package, script, tmp_path, settings=load_settings(agent_thinking=False))
     assert json.loads((r.run_dir / "metrics.json").read_text())["thought_coverage"] == 0.5
     assert "| Мысль записана у каждого вызова инструмента | ❌ | 1 из 2 |" in r.report_path.read_text(encoding="utf-8")
+
+
+def test_runs_started_in_the_same_second_get_their_own_directories(tmp_path):
+    from contract_analyst.agent.runner import _run_dir
+
+    first, second = _run_dir(tmp_path, "B"), _run_dir(tmp_path, "B")
+    assert first != second and first.exists() and second.exists()

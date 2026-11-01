@@ -35,12 +35,18 @@ class RunResult(BaseModel):
 
 
 def _run_dir(out_dir: Path, variant: str) -> Path:
+    """A new directory per run. Created here, atomically: two runs started in the same second (another process,
+    another model) must not write into one directory."""
     base = out_dir / f"{datetime.now():%Y%m%d-%H%M%S}-{variant}"
-    path, n = base, 1
-    while path.exists():
-        n += 1
-        path = base.with_name(f"{base.name}-{n}")
-    return path
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n = 1
+    while True:
+        path = base if n == 1 else base.with_name(f"{base.name}-{n}")
+        try:
+            path.mkdir()
+            return path
+        except FileExistsError:
+            n += 1
 
 
 class InputError(ValueError):
