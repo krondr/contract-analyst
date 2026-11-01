@@ -73,6 +73,12 @@ def test_every_refused_field_listed_including_end_date_and_parties():
     assert "| parties.Арендатор.name | ООО «Тест» | rejected | value_not_in_quote |" in refusals
 
 
+def test_not_yet_in_force_reads_as_a_future_start():
+    ctx = small_context()
+    ctx.consolidated = {MAIN: consolidate(ctx.chains[0], ctx.records, date(2020, 6, 1))}
+    assert "Статус на 2020-06-01: **ещё не вступил в силу**; вступает в силу 2021-01-21." in render_report(ctx)
+
+
 def test_unreferenced_numeric_sentence_removed():
     md = llm("Ставка выросла до 900 рублей. Условия совпадают [doc:abc:p1].")
     out, removed = verify_claims(md, {"doc:abc:p1": "Ставка 900 рублей."})

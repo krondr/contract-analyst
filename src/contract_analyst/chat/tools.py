@@ -10,7 +10,7 @@ from datetime import date
 from pydantic import BaseModel, Field
 
 from contract_analyst.kb.store import KnowledgeBase
-from contract_analyst.labels import STATUS_RU
+from contract_analyst.labels import status_ru
 from contract_analyst.models import ConsolidatedContract, DocumentRecord, OpType, Source, ValueStatus
 from contract_analyst.report.render import money
 
@@ -67,8 +67,7 @@ def contract_terms(kb: KnowledgeBase, a: TermsArgs) -> dict:
         return {"error": f"договора {a.contract_number} нет в базе"}
     records = kb.records()
     return {"contract": c.contract_number, "as_of": c.as_of,
-            "status": f"{STATUS_RU.get(c.status, c.status)} {_status_ref(kb, c, records)}".strip(),
-            "status_since": c.status_since,
+            "status": f"{status_ru(c.status, c.status_since)} {_status_ref(kb, c, records)}".strip(),
             "terms": {k: f"{v.current.value} {_ref(v.current.source)}" for k, v in c.terms.items()
                       if v.current.status == ValueStatus.ACCEPTED},
             "rates": [f"{r.label}: {money(r.amount)} руб. ({r.vat}) с {r.valid_from or '—'} по {r.valid_to or '—'} "

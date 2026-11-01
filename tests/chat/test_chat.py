@@ -108,6 +108,12 @@ def test_tools_cite_status_documents_and_contracts(tmp_path):
     assert contract["source"] == "[doc:m:p1]"
 
 
+def test_status_of_a_contract_not_yet_in_force_reads_as_a_future_start(tmp_path):
+    args = {"contract_number": MAIN, "as_of": "2020-06-01"}
+    terms = json.loads(run_chat_tool(kb(tmp_path), "get_contract_terms", args))
+    assert terms["status"] == "ещё не вступил в силу; вступает в силу 2021-01-21 [doc:m:p1]"
+
+
 def test_chat_eval_scores_facts_refusals_and_refs(tmp_path):
     questions = tmp_path / "q.yaml"
     questions.write_text("""
