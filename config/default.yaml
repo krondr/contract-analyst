@@ -5,10 +5,10 @@ llm_num_ctx: 16384
 llm_batch_tokens: 6000
 llm_cache_mode: record                 # record | replay | off
 
-ocr_engine: tesseract                  # E1: tesseract | rapidocr
-ocr_preprocess: none                   # E1: none | deskew_sauvola
+ocr_engine: rapidocr                   # E1 winner (docs/experiments/e1_ocr.md): tesseract | rapidocr
+ocr_preprocess: none                   # E1 winner: none | deskew_sauvola
 ocr_dpi: 300
-ocr_word_conf_threshold: 0.80          # E1 calibration
+ocr_word_conf_threshold: 0.90          # E1: synthetic rule gives 0.55; real scans need 0.90 for precision 1.0
 ocr_quote_fuzzy_threshold: 90
 text_layer_min_chars: 50
 low_quality_ratio: 0.2
