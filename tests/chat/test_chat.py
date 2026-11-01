@@ -184,3 +184,15 @@ def test_expected_dates_and_amounts_match_in_any_written_form():
     assert fact_present("01.04.2025", "с «1» апреля 2025 г. плата 120 000 руб.")
     assert fact_present("120 000", "плата 120000 руб.")
     assert not fact_present("01.01.2027", "ставка 800 руб. с 2026-01-01")
+
+
+def test_rate_lines_never_print_none_or_vat_for_percent(tmp_path):
+    from decimal import Decimal
+
+    from contract_analyst.chat.tools import _rate_line
+    from contract_analyst.models import RateRow, ValueStatus
+
+    planned = RateRow(label="Ставка", amount=Decimal(800), status=ValueStatus.ACCEPTED, vat="excluded")
+    percent = RateRow(label="Вознаграждение", amount=Decimal(60), unit="%", status=ValueStatus.ACCEPTED)
+    assert "None" not in _rate_line(planned) and "без НДС" in _rate_line(planned)
+    assert "НДС" not in _rate_line(percent) and "60 %" in _rate_line(percent)

@@ -70,11 +70,16 @@ def contract_terms(kb: KnowledgeBase, a: TermsArgs) -> dict:
             "status": f"{status_ru(c.status, c.status_since)} {_status_ref(kb, c, records)}".strip(),
             "terms": {k: f"{v.current.value} {_ref(v.current.source)}" for k, v in c.terms.items()
                       if v.current.status == ValueStatus.ACCEPTED},
-            "rates": [f"{r.label}: {amount(r)} {VAT_RU[r.vat]} с {r.valid_from or '—'} по {r.valid_to or '—'} "
-                      f"{_ref(r.source)}" for r in c.rates],
-            "planned_rates": [f"{r.label}: {amount(r)} {VAT_RU[r.vat]} с {r.valid_from} {_ref(r.source)}" for r in c.planned_rates],
+            "rates": [_rate_line(r) for r in c.rates],
+            "planned_rates": [_rate_line(r) for r in c.planned_rates],
             "documents": [f"{e.number or e.doc_id} с {e.when or '—'}: {e.summary}{' (отменён)' if e.invalidated else ''} "
                           f"{_doc_ref(records.get(e.doc_id))}".strip() for e in c.timeline]}
+
+
+def _rate_line(r) -> str:
+    """«Ставка: 800 руб. без НДС с 2027-01-01 по — [doc:…]»; a percentage carries no VAT, a missing date is a dash."""
+    vat = "" if r.unit == "%" else f" {VAT_RU[r.vat]}"
+    return f"{r.label}: {amount(r)}{vat} с {r.valid_from or '—'} по {r.valid_to or '—'} {_ref(r.source)}".strip()
 
 
 def contracts(kb: KnowledgeBase, a: ChatArgs) -> dict:

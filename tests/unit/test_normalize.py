@@ -26,3 +26,13 @@ def test_redaction_markers(frag):
 
 def test_plain_text_is_not_redacted():
     assert not is_redacted("ООО «Ромашка»")
+
+
+@pytest.mark.parametrize("frag", ["вознаграждение — ХХХХ рублей", "ставка XXX руб.", "в размере ххх,хх рублей"])
+def test_letter_masks_are_redaction(frag):
+    assert is_redacted(frag)
+
+
+@pytest.mark.parametrize("frag", ["Договор № D990000001-01", "пункт XII Договора", "ООО «Ромашка»"])
+def test_roman_numerals_and_names_are_not_redaction(frag):
+    assert not is_redacted(frag)

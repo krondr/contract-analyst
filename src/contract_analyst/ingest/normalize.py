@@ -12,7 +12,8 @@ _HAS_LATIN = re.compile(r"[A-Za-z]")
 _HYPHEN_BREAK = re.compile(r"([A-Za-zА-Яа-яЁё])-\n([a-zа-яё])")
 _SPACES = re.compile(r"[ \t ]+")
 
-_REDACTION_RE = re.compile(r"_{3,}|(?:-\s){2,}-|«\s*»|\"\s*\"")
+# Blanks, dashes, empty quotes, and letter masks a template leaves instead of a value («ХХХХ рублей», «XXX руб.»).
+_REDACTION_RE = re.compile(r"_{3,}|(?:-\s){2,}-|«\s*»|\"\s*\"|(?<![А-Яа-яЁёA-Za-z])[ХхXx]{3,}(?:[.,][ХхXx]{2,})?(?![А-Яа-яЁёA-Za-z])")
 
 
 def _fix_homoglyphs(match: re.Match[str]) -> str:
