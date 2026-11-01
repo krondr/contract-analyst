@@ -1,6 +1,7 @@
 import json
 
 from contract_analyst.chat.graph import ChatSession
+from contract_analyst.chat.tools import run_chat_tool
 from contract_analyst.config import load_settings
 from contract_analyst.eval.chat_eval import chat_eval
 from contract_analyst.kb.store import KnowledgeBase
@@ -51,6 +52,66 @@ def test_unsupported_number_removed_and_empty_answer_becomes_refusal(tmp_path):
     session = ChatSession(kb(tmp_path), ScriptedClient([AssistantTurn(content="Срок истекает в 2030 году.")]),
                           load_settings(), tmp_path / "chat.sqlite")
     assert session.ask("Когда истекает срок?", thread="t4") == "Нет данных в базе знаний."
+
+
+def test_number_absent_from_the_cited_page_removed(tmp_path):
+    session = ChatSession(kb(tmp_path), ScriptedClient([AssistantTurn(content="Действует ставка 900 рублей [doc:m:p1].")]),
+                          load_settings(), tmp_path / "chat.sqlite")
+    assert session.ask("Какая ставка действует?", thread="t5") == "Нет данных в базе знаний."
+
+
+def empty_kb(tmp_path):
+    base = KnowledgeBase(tmp_path / "empty")
+    base.save(documents={}, records={}, chains=[], consolidated={}, clusters=[], decisions=[])
+    return base
+
+
+def test_statement_without_reference_refused_even_without_numbers(tmp_path):
+    session = ChatSession(empty_kb(tmp_path), ScriptedClient([AssistantTurn(content="Да, расторгнут.")]),
+                          load_settings(), tmp_path / "chat.sqlite")
+    assert session.ask("Договор расторгнут?", thread="t6") == "Нет данных в базе знаний."
+
+
+def test_only_referenced_statements_kept(tmp_path):
+    client = ScriptedClient([AssistantTurn(content="Ставка 500 рублей [doc:m:p1]. Договор скоро расторгнут.")])
+    session = ChatSession(kb(tmp_path), client, load_settings(), tmp_path / "chat.sqlite")
+    assert session.ask("Какая ставка?", thread="t7") == "Ставка 500 рублей [doc:m:p1]."
+
+
+def test_date_the_user_asked_about_frames_the_answer(tmp_path):
+    client = ScriptedClient([AssistantTurn(content="На 30.10.2026 действует ставка 500 рублей [doc:m:p1]."),
+                             AssistantTurn(content="Ставка 500 рублей действует с 30.10.2026 [doc:m:p1].")])
+    session = ChatSession(kb(tmp_path), client, load_settings(), tmp_path / "chat.sqlite")
+    question = "Какая ставка действует на 30.10.2026?"
+    assert session.ask(question, thread="t8") == "На 30.10.2026 действует ставка 500 рублей [doc:m:p1]."
+    assert session.ask(question, thread="t9") == "Нет данных в базе знаний."  # "с 30.10.2026" is a claim
+
+
+def test_memory_keeps_only_what_the_user_saw(tmp_path):
+    client = ScriptedClient([call("get_contract_terms", contract_number=MAIN),
+                             AssistantTurn(content="Ставка составляет 900 рублей."),
+                             AssistantTurn(content="Да, договор расторгнут.")])
+    session = ChatSession(kb(tmp_path), client, load_settings(), tmp_path / "chat.sqlite")
+    assert session.ask("Какая ставка?", "t10") == "Нет данных в базе знаний."
+    session.ask("А он расторгнут?", "t10")
+    context = client.calls[2]["messages"][1:]
+    assert [(m["role"], m["content"]) for m in context] == [
+        ("user", "Какая ставка?"), ("assistant", "Нет данных в базе знаний."), ("user", "А он расторгнут?")]
+
+
+def test_tools_cite_status_documents_and_contracts(tmp_path):
+    base = kb(tmp_path)
+    terms = json.loads(run_chat_tool(base, "get_contract_terms", {"contract_number": MAIN}))
+    assert terms["status"] == "действует [doc:m:p1]"
+    assert len(terms["documents"]) == 2 and all(d.endswith(("[doc:m:p1]", "[doc:s:p1]")) for d in terms["documents"])
+    (contract,) = json.loads(run_chat_tool(base, "list_contracts", {}))["contracts"]
+    assert contract["source"] == "[doc:m:p1]"
+
+
+def test_status_of_a_contract_not_yet_in_force_reads_as_a_future_start(tmp_path):
+    args = {"contract_number": MAIN, "as_of": "2020-06-01"}
+    terms = json.loads(run_chat_tool(kb(tmp_path), "get_contract_terms", args))
+    assert terms["status"] == "ещё не вступил в силу; вступает в силу 2021-01-21 [doc:m:p1]"
 
 
 def test_chat_eval_scores_facts_refusals_and_refs(tmp_path):

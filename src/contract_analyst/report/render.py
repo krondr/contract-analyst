@@ -21,9 +21,22 @@ from contract_analyst.models import (
     Source,
     ValueStatus,
 )
+from contract_analyst.report.verify import grounding
+
+
+def _neutralize(value: object) -> object:
+    """Every value the template prints comes from a document or the model. It must not open an HTML comment,
+    which hides the rest of the report, nor fake the <!-- llm --> markers that verify_claims relies on."""
+    if isinstance(value, jinja2.Undefined):
+        return value
+    return str(value).replace("<", "&lt;").replace(">", "&gt;")
+
 
 _ENV = jinja2.Environment(loader=jinja2.FileSystemLoader(Path(__file__).parent / "templates"),
-                          undefined=jinja2.StrictUndefined, trim_blocks=True, lstrip_blocks=True, autoescape=False)
+                          undefined=jinja2.StrictUndefined, trim_blocks=True, lstrip_blocks=True, autoescape=False,
+                          finalize=_neutralize)
+
+
 class ReflectionItem(BaseModel):
     item: str
     ok: bool
@@ -72,7 +85,8 @@ def cell(text: object) -> str:
 def _refusals(ctx: ReportContext) -> list[dict]:
     rows = []
     for doc_id, r in sorted(ctx.records.items(), key=lambda kv: kv[1].file_name):
-        fields = {f: getattr(r, f) for f in ("number", "doc_date", "city", "parent", "effective_from")}
+        fields = {name: v for name in type(r).model_fields if isinstance(v := getattr(r, name), Extracted)}
+        fields.update({f"parties.{p.role}.{part}": getattr(p, part) for p in r.parties for part in ("name", "org_type")})
         fields.update({f"terms.{k}": v for k, v in r.terms.items()})
         for name, ext in fields.items():
             if ext.status in (ValueStatus.REJECTED, ValueStatus.CONFLICT, ValueStatus.REDACTED):
@@ -105,6 +119,12 @@ def _rate_history(chain: ContractChain, records: dict[str, DocumentRecord]) -> d
                 since = f" с {rate.valid_from}" if rate.valid_from else ""
                 history.setdefault(rate.label, []).append(f"{money(rate.amount)}{since} {ref(rate.source)}")
     return {label: steps for label, steps in history.items() if len(steps) > 1}
+
+
+def report_sources(ctx: ReportContext) -> dict[str, str]:
+    """What backs the LLM-written sentences of this report: see verify.grounding."""
+    return grounding(((d.doc_id, p.number, p.text) for d in ctx.documents for p in d.pages), ctx.records, ctx.chains,
+                     ctx.consolidated)
 
 
 def render_report(ctx: ReportContext) -> str:

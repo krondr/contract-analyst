@@ -57,7 +57,7 @@
 ### {{ chain.contract_number }}
 
 {% if cc %}
-Статус на {{ cc.as_of }}: **{{ STATUS_RU.get(cc.status, cc.status) }}**{% if cc.status_since %} (с {{ cc.status_since }}){% endif %}.
+Статус на {{ cc.as_of }}: **{{ STATUS_RU.get(cc.status, cc.status) }}**{% if cc.status == "not_yet_in_force" and cc.status_since %}; вступает в силу {{ cc.status_since }}{% elif cc.status_since %} (с {{ cc.status_since }}){% endif %}.
 {% endif %}
 {% if chain.main_date and chain.main_date.value %}
 Дата основного договора: {{ chain.main_date.value }} ({{ chain.main_date.status.value }}) {{ ref(chain.main_date.source) }}
@@ -131,8 +131,9 @@
 
 | Проблема | Договор | Решение | Обоснование |
 |---|---|---|---|
+{% set known = chains | map(attribute="contract_number") | list %}
 {% for d in ctx.decisions %}
-| `{{ d.issue_code }}` | {{ d.contract_number or "—" }} | {{ cell(d.decision) }} | {{ cell(d.rationale) }} |
+| `{{ cell(d.issue_code) }}` | {{ d.contract_number if d.contract_number in known else "—" }} | <!-- llm -->{{ cell(d.decision) }}<!-- /llm --> | <!-- llm -->{{ cell(d.rationale) }}<!-- /llm --> |
 {% endfor %}
 {% endif %}
 

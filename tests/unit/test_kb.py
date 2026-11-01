@@ -6,7 +6,8 @@ from contract_analyst.assemble.chains import build_chains
 from contract_analyst.assemble.consolidate import consolidate
 from contract_analyst.kb.lemmatize import lemmatize
 from contract_analyst.kb.store import KnowledgeBase
-from contract_analyst.models import Extracted, Source, ValueStatus
+from contract_analyst.models import Extracted, Party, Source, ValueStatus
+from contract_analyst.report.verify import verify_text
 from tests.fixtures.builders import make_record as rec
 from tests.fixtures.builders import text_doc
 
@@ -56,11 +57,36 @@ def test_rejected_value_not_stored_as_fact(tmp_path):
     assert "секретное значение" not in (tmp_path / "records.json").read_text(encoding="utf-8")
 
 
+def test_no_rejected_value_reaches_the_knowledge_base(tmp_path):
+    run = small_run()
+    sup = run["records"]["s"]
+    sup.effective_to = Extracted(value=date(2027, 12, 31), status=ValueStatus.REJECTED,
+                                 reason="bad_format: дата 2027-12-31 вне диапазона")
+    sup.parties = [Party(role="p0", org_type=Extracted(status=ValueStatus.ABSENT), name=Extracted(
+        value="ООО «Тайна»", status=ValueStatus.REJECTED, source=Source(doc_id="s", page=1, quote="ООО «Тайна»"),
+        reason="value_not_in_quote: ООО «Тайна»"))]
+    KnowledgeBase(tmp_path).save(**run)
+    stored = (tmp_path / "records.json").read_text(encoding="utf-8")
+    assert "2027-12-31" not in stored and "Тайна" not in stored and "секретное значение" not in stored
+    assert KnowledgeBase(tmp_path).records()["s"].effective_to.status == ValueStatus.REJECTED
+
+
 def test_terms_recomputed_for_other_date(tmp_path):
     kb = KnowledgeBase(tmp_path)
     kb.save(**small_run())
     assert [r.amount for r in kb.get_contract_terms(MAIN).rates] == [Decimal(500)]
     assert [r.amount for r in kb.get_contract_terms(MAIN, date(2027, 2, 1)).rates] == [Decimal(700)]
+
+
+def test_sources_back_claims_with_page_text_and_cited_values(tmp_path):
+    kb = KnowledgeBase(tmp_path)
+    kb.save(**small_run())
+    sources = kb.sources()
+    assert set(sources) == kb.valid_refs()
+    for text in ["Ставка вознаграждения 500 рублей [doc:m:p1].",  # page text
+                 "С 01.01.2027 ставка 700 руб. [doc:s:p1]."]:  # a rate cited with that page
+        assert verify_text(text, sources) == (text, 0), text
+    assert verify_text("Ставка 700 руб. [doc:m:p1].", sources) == ("", 1)
 
 
 def test_valid_refs_and_issues(tmp_path):
