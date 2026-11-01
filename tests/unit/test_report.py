@@ -5,7 +5,7 @@ from contract_analyst.analyze.cluster import cluster_contracts
 from contract_analyst.assemble.chains import build_chains
 from contract_analyst.assemble.consolidate import consolidate
 from contract_analyst.config import load_settings
-from contract_analyst.models import Decision, Extracted, OpType, Source, ValueStatus
+from contract_analyst.models import Decision, Extracted, OpType, Party, Source, ValueStatus
 from contract_analyst.report.render import ReflectionItem, ReportContext, render_report, report_sources
 from contract_analyst.report.verify import verify_claims
 from tests.fixtures.builders import make_record as rec
@@ -59,6 +59,18 @@ def test_refusals_decisions_and_unprocessed_listed():
 
 def llm(text: str) -> str:
     return f"<!-- llm -->{text}<!-- /llm -->"
+
+
+def test_every_refused_field_listed_including_end_date_and_parties():
+    ctx = small_context()
+    sup = ctx.records["s"]
+    sup.effective_to = Extracted(value=date(2027, 12, 31), status=ValueStatus.REJECTED,
+                                 source=Source(doc_id="s", page=1, quote="до 31.12.2027"), reason="date_not_in_document")
+    sup.parties = [Party(role="Арендатор", org_type=Extracted(status=ValueStatus.ABSENT),
+                         name=Extracted(value="ООО «Тест»", status=ValueStatus.REJECTED, reason="value_not_in_quote"))]
+    refusals = render_report(ctx).split("## 5. Отказы и противоречия")[1].split("## 6.")[0]
+    assert "| effective_to | 2027-12-31 | rejected | date_not_in_document | [doc:s:p1] |" in refusals
+    assert "| parties.Арендатор.name | ООО «Тест» | rejected | value_not_in_quote |" in refusals
 
 
 def test_unreferenced_numeric_sentence_removed():

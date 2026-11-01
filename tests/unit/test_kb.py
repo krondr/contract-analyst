@@ -6,7 +6,7 @@ from contract_analyst.assemble.chains import build_chains
 from contract_analyst.assemble.consolidate import consolidate
 from contract_analyst.kb.lemmatize import lemmatize
 from contract_analyst.kb.store import KnowledgeBase
-from contract_analyst.models import Extracted, Source, ValueStatus
+from contract_analyst.models import Extracted, Party, Source, ValueStatus
 from contract_analyst.report.verify import verify_text
 from tests.fixtures.builders import make_record as rec
 from tests.fixtures.builders import text_doc
@@ -55,6 +55,20 @@ def test_search_can_filter_by_contract(tmp_path):
 def test_rejected_value_not_stored_as_fact(tmp_path):
     KnowledgeBase(tmp_path).save(**small_run())
     assert "секретное значение" not in (tmp_path / "records.json").read_text(encoding="utf-8")
+
+
+def test_no_rejected_value_reaches_the_knowledge_base(tmp_path):
+    run = small_run()
+    sup = run["records"]["s"]
+    sup.effective_to = Extracted(value=date(2027, 12, 31), status=ValueStatus.REJECTED,
+                                 reason="bad_format: дата 2027-12-31 вне диапазона")
+    sup.parties = [Party(role="p0", org_type=Extracted(status=ValueStatus.ABSENT), name=Extracted(
+        value="ООО «Тайна»", status=ValueStatus.REJECTED, source=Source(doc_id="s", page=1, quote="ООО «Тайна»"),
+        reason="value_not_in_quote: ООО «Тайна»"))]
+    KnowledgeBase(tmp_path).save(**run)
+    stored = (tmp_path / "records.json").read_text(encoding="utf-8")
+    assert "2027-12-31" not in stored and "Тайна" not in stored and "секретное значение" not in stored
+    assert KnowledgeBase(tmp_path).records()["s"].effective_to.status == ValueStatus.REJECTED
 
 
 def test_terms_recomputed_for_other_date(tmp_path):

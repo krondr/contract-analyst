@@ -85,7 +85,8 @@ def cell(text: object) -> str:
 def _refusals(ctx: ReportContext) -> list[dict]:
     rows = []
     for doc_id, r in sorted(ctx.records.items(), key=lambda kv: kv[1].file_name):
-        fields = {f: getattr(r, f) for f in ("number", "doc_date", "city", "parent", "effective_from")}
+        fields = {name: v for name in type(r).model_fields if isinstance(v := getattr(r, name), Extracted)}
+        fields.update({f"parties.{p.role}.{part}": getattr(p, part) for p in r.parties for part in ("name", "org_type")})
         fields.update({f"terms.{k}": v for k, v in r.terms.items()})
         for name, ext in fields.items():
             if ext.status in (ValueStatus.REJECTED, ValueStatus.CONFLICT, ValueStatus.REDACTED):

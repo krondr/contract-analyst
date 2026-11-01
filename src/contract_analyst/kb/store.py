@@ -38,13 +38,16 @@ class ClauseHit(BaseModel):
 
 
 def _scrub(ext: Extracted) -> Extracted:
-    return ext if ext.status in _KEEP else ext.model_copy(update={"value": None})
+    """A value the gate did not keep leaves only its status and reason code: its quote and the detailed reason
+    ("даты 2027-12-31 нет в цитате") can repeat the value itself."""
+    if ext.status in _KEEP:
+        return ext
+    return type(ext)(status=ext.status, reason=ext.reason.split(":")[0] if ext.reason else None)
 
 
 def _scrub_record(r: DocumentRecord) -> DocumentRecord:
     return r.model_copy(update={
-        **{f: _scrub(getattr(r, f)) for f in ("kind", "number", "doc_date", "city", "parent", "effective_from",
-                                              "subject_category")},
+        **{name: _scrub(v) for name in type(r).model_fields if isinstance(v := getattr(r, name), Extracted)},
         "terms": {k: _scrub(v) for k, v in r.terms.items()},
         "parties": [p.model_copy(update={"name": _scrub(p.name), "org_type": _scrub(p.org_type)}) for p in r.parties],
         "rates": [x for x in r.rates if x.status == ValueStatus.ACCEPTED],
