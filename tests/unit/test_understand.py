@@ -4,11 +4,13 @@ from decimal import Decimal
 from pathlib import Path
 
 from contract_analyst.config import load_settings
+from contract_analyst.ingest.inventory import list_inputs
+from contract_analyst.ingest.reader import read_document
 from contract_analyst.llm.scripted import ScriptedClient, load_script
 from contract_analyst.parsing.header import HeaderGuess, parse_header
 from contract_analyst.understand.routing import estimate_tokens, select_clauses
 from contract_analyst.understand.understand import understand_document
-from tests.fixtures.builders import text_doc
+from tests.fixtures.builders import FakeOcrEngine, make_docx, text_doc
 
 SCRIPTS = Path(__file__).parent / "scripts"
 SUPPLEMENT = ("Дополнительное соглашение № D990000002-01\n"
@@ -96,6 +98,72 @@ def test_timeout_records_issue():
 
     rec = understand_document(text_doc([SUPPLEMENT]), parse_header(SUPPLEMENT), Slow([]), load_settings(), ["header"])
     assert "llm_timeout" in [i.code for i in rec.issues]
+
+
+CHANGE_LIST = ("Дополнительное соглашение № D990000002-01\nк Договору № D990000001-01 от «21» января 2021 г.\n"
+               "1. Внести в Договор следующие изменения:\n"
+               "1.1. Пункт 3.1 Договора изложить в следующей редакции: «Ставка составляет 700 рублей».\n"
+               "1.2. Пункт 5.2 Договора исключить.\n2. Настоящее Соглашение вступает в силу с 01.07.2026.")
+
+
+def _ops_clauses(doc, supplement=True):
+    return [c.clause_id for b in select_clauses(doc, "ops", load_settings(), supplement=supplement) for c in b]
+
+
+def test_supplement_ops_routing_takes_the_change_list_and_its_sub_clauses():
+    doc = text_doc([CHANGE_LIST])
+    assert _ops_clauses(doc) == ["1", "1.1", "1.2", "2"]
+    assert _ops_clauses(doc, supplement=False) == ["2"]  # main contracts keep their routing and recorded cache
+
+
+def test_supplement_ops_routing_ignores_keywords_inside_quoted_new_wording():
+    doc = text_doc([("Дополнительное соглашение № D990000002-01\nк Договору № D990000001-01 от «21» января 2021 г.\n"
+                     "1. Раздел 9 Договора изложить в следующей редакции:\n«9. Расторжение Договора\n"
+                     "9.1. Договор может быть расторгнут по соглашению Сторон.\n"
+                     "9.2. Сторона вправе расторгнуть Договор в одностороннем порядке».\n"
+                     "2. Настоящее Соглашение вступает в силу с 01.07.2026.\n"
+                     "3. Соглашение составлено в двух экземплярах.")])
+    assert _ops_clauses(doc) == ["1", "2"]
+
+
+def test_supplement_with_few_clauses_goes_to_ops_whole():
+    doc = text_doc([("Дополнительное соглашение № D990000002-01 к Договору № D990000001-01 от 21.01.2021\n"
+                     "1. Стороны согласовали ставку 700 рублей с 01.07.2026.\n"
+                     "2. Соглашение составлено в двух экземплярах.")])
+    assert _ops_clauses(doc) == ["preamble", "1", "2"]
+
+
+def test_auto_numbered_docx_supplement_reaches_ops(tmp_path):
+    make_docx(tmp_path / "ds.docx", ["Дополнительное соглашение № D990000002-01 к Договору № D990000001-01 от 21.01.2021",
+                                     "Пункт 3.1 Договора изложить в следующей редакции: ставка 700 рублей.",
+                                     "Настоящее Соглашение вступает в силу с 01.07.2026."], numbered=(1, 2))
+    (f,) = list_inputs(tmp_path)
+    doc = read_document(f, FakeOcrEngine(), load_settings())
+    assert [c.clause_id for c in doc.clauses] == ["preamble"] and _ops_clauses(doc) == ["preamble"]
+
+
+def test_supplement_ops_call_sees_every_operation():
+    client = ScriptedClient([_header_json(kind="supplement"), '{"ops": []}'])
+    understand_document(text_doc([CHANGE_LIST]), parse_header(CHANGE_LIST), client, load_settings(),
+                        groups=["header", "ops"])
+    body = client.calls[-1]["messages"][1]["content"]
+    assert "1.1. Пункт 3.1" in body and "1.2. Пункт 5.2" in body
+
+
+def test_ops_skipped_only_when_title_and_model_both_say_main():
+    supplement = text_doc([("Дополнительное соглашение № D990000005-01\nг. Тверь 01.06.2026 г.\n"
+                            "1. Внести в Договор аренды следующие изменения:\n1.1. Пункт 3.1 изложить в новой редакции.\n"
+                            "2. Соглашение вступает в силу с 01.07.2026.")])
+    client = ScriptedClient([_header_json(kind="main"), '{"ops": []}'])
+    understand_document(supplement, parse_header(supplement.pages[0].text), client, load_settings(),
+                        groups=["header", "ops"])
+    assert [c["schema"] for c in client.calls] == ["HeaderOut", "OpsOut"]
+    contract = text_doc([("Договор аренды № D990000006-01\nг. Тверь 01.06.2026 г.\n1. Предмет договора: аренда.\n"
+                          "2. Договор может быть расторгнут по соглашению Сторон.")])
+    client = ScriptedClient([_header_json(kind="main")])
+    understand_document(contract, parse_header(contract.pages[0].text), client, load_settings(),
+                        groups=["header", "ops"])
+    assert [c["schema"] for c in client.calls] == ["HeaderOut"]
 
 
 def test_quote_found_on_another_page():

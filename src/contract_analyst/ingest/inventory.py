@@ -23,11 +23,11 @@ def list_inputs(root: Path) -> list[InputFile]:
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         if _skipped(path.relative_to(root)):
             continue
-        data = path.read_bytes()
-        sha = hashlib.sha256(data).hexdigest()
+        with path.open("rb") as fh:
+            sha = hashlib.file_digest(fh, "sha256").hexdigest()
         files.append(InputFile(
             path=str(path), name=unicodedata.normalize("NFC", path.name), sha256=sha,
-            format=_FORMATS.get(path.suffix.lower(), DocFormat.UNSUPPORTED), size_bytes=len(data),
+            format=_FORMATS.get(path.suffix.lower(), DocFormat.UNSUPPORTED), size_bytes=path.stat().st_size,
             duplicate_of=first_by_hash.get(sha)))
         first_by_hash.setdefault(sha, str(path))
     return files

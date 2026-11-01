@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from typing import NamedTuple
 
 DOC_NUMBER_RE = re.compile(r"(?<![0-9A-Za-z])D\d{9}(?:-\d{2})?(?!\d)")
 
@@ -15,7 +16,18 @@ RU_MONTHS = {
 _MONTH_ALT = r"январ[яь]|феврал[яь]|марта?|апрел[яь]|ма[яй]|июн[яь]|июл[яь]|августа?|сентябр[яь]|октябр[яь]|ноябр[яь]|декабр[яь]"
 _TEXT_DATE_RE = re.compile(rf"«?\s*(\d{{1,2}})\s*»?\s+({_MONTH_ALT})\s+(\d{{4}})", re.IGNORECASE)
 _NUM_DATE_RE = re.compile(r"(?<!\d)(\d{1,2})\.(\d{1,2})\.(\d{4})(?!\d)")
-_MONEY_RE = re.compile(r"(?<![\d.,])\d{1,3}(?:[  ]\d{3})+(?!\d)(?:[.,]\d+)?|(?<![\d.,])\d+(?:[.,]\d+)?")
+_MONEY_RE = re.compile(r"(?<![\d.,])\d{1,3}(?:[  ]\d{3})+(?!\d)(?:[.,]\d+)?|(?<![\d.,])\d+(?:[.,]\d+)?")
+_CELLS_ONLY = re.compile(r"[\s|]*(?:\d+(?:[.,]\d+)?[\s|]*)*")
+# What follows a number in a sentence and never starts the next table row: a lowercase word, a bracketed
+# amount in words, a unit.
+_SENTENCE_GOES_ON = re.compile(r"\s*(?:[a-zа-яё(%₽]|(?i:руб|ндс|коп))")
+
+
+class NumberReading(NamedTuple):
+    value: Decimal
+    start: int
+    end: int
+    ambiguous: bool  # "270 500" on a table row: one amount, or two cells
 
 
 def _month_number(word: str) -> int | None:
@@ -35,17 +47,22 @@ def _safe_date(year: int, month: int | None, day: int) -> date | None:
         return None
 
 
-def find_dates(text: str) -> list[tuple[date, str]]:
-    found: list[tuple[int, date, str]] = []
+def date_spans(text: str) -> list[tuple[date, int, int]]:
+    """Every date with its position, in text order."""
+    found: list[tuple[date, int, int]] = []
     for m in _TEXT_DATE_RE.finditer(text):
         d = _safe_date(int(m.group(3)), _month_number(m.group(2)), int(m.group(1)))
         if d:
-            found.append((m.start(), d, m.group(0).strip()))
+            found.append((d, m.end() - len(m.group(0).lstrip()), m.end()))
     for m in _NUM_DATE_RE.finditer(text):
         d = _safe_date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
         if d:
-            found.append((m.start(), d, m.group(0)))
-    return [(d, span) for _, d, span in sorted(found, key=lambda item: item[0])]
+            found.append((d, m.start(), m.end()))
+    return sorted(found, key=lambda item: item[1])
+
+
+def find_dates(text: str) -> list[tuple[date, str]]:
+    return [(d, text[start:end]) for d, start, end in date_spans(text)]
 
 
 def parse_ru_date(s: str) -> date | None:
@@ -58,30 +75,59 @@ def parse_ru_date(s: str) -> date | None:
 _OCR_NUMBER_RE = re.compile(r"(?<![0-9A-Za-zА-Яа-я])(?:D|[0ОOДD](?=\d{9}-\d{2}(?!\d)))(\d{9}(?:-\d{2})?)(?!\d)")
 
 
+def doc_number_spans(text: str) -> list[tuple[str, int, int]]:
+    return [(f"D{m.group(1)}", m.start(), m.end()) for m in _OCR_NUMBER_RE.finditer(text)]
+
+
 def find_doc_numbers(text: str) -> list[str]:
-    return [f"D{m.group(1)}" for m in _OCR_NUMBER_RE.finditer(text)]
+    return [number for number, _, _ in doc_number_spans(text)]
 
 
 def _to_decimal(raw: str) -> Decimal | None:
     try:
-        return Decimal(raw.replace(" ", "").replace(" ", "").replace(",", "."))
+        return Decimal(raw.replace(" ", "").replace(" ", "").replace(",", "."))
     except InvalidOperation:
         return None
 
 
-def find_numbers(text: str) -> list[Decimal]:
-    """All amount-like numbers in order; dates are removed first so their parts are not counted.
+def ends_table_row(text: str, end: int) -> bool:
+    """Only numeric cells follow position `end` on its line, and the next line does not continue a sentence."""
+    line_end = text.find("\n", end)
+    line_end = len(text) if line_end < 0 else line_end
+    return bool(_CELLS_ONLY.fullmatch(text, end, line_end)) and not _SENTENCE_GOES_ON.match(text, line_end)
 
-    "270 500" is ambiguous: one amount with a thousands separator or two table cells. Both readings are kept,
-    the grouped one first, so parse_money("1 500") is still 1500.
+
+def _may_be_cells(text: str, start: int, end: int) -> bool:
+    """A space-grouped number may be adjacent table cells that PyMuPDF or OCR put on one line: its row has no
+    explicit cell separator."""
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    return "|" not in text[line_start:None if line_end < 0 else line_end] and ends_table_row(text, end)
+
+
+def number_readings(text: str, split_cells: bool = True) -> list[NumberReading]:
+    """Amount-like numbers in order, with positions; numeric dates are not counted.
+
+    "1 500 рублей" is one amount. "Тариф Старт 270 500" on a table row may be one amount or two cells: then the
+    grouped reading and each cell are all kept, marked ambiguous, the grouped one first.
     """
-    without_dates = _NUM_DATE_RE.sub(" ", text)
-    found: list[Decimal] = []
-    for m in _MONEY_RE.finditer(without_dates):
-        raw = m.group(0)
-        readings = [raw] + (raw.replace("\u00a0", " ").split(" ") if re.search(r"[ \u00a0]", raw) else [])
-        found.extend(n for n in (_to_decimal(r) for r in readings) if n is not None)
+    masked = _NUM_DATE_RE.sub(lambda m: " " * len(m.group(0)), text)
+    found: list[NumberReading] = []
+    for m in _MONEY_RE.finditer(masked):
+        value = _to_decimal(m.group(0))
+        if value is None:
+            continue
+        cells = split_cells and bool(re.search(r"\s", m.group(0))) and _may_be_cells(masked, m.start(), m.end())
+        found.append(NumberReading(value, m.start(), m.end(), cells))
+        if cells:
+            for part in re.finditer(r"\S+", m.group(0)):
+                if (n := _to_decimal(part.group(0))) is not None:
+                    found.append(NumberReading(n, m.start() + part.start(), m.start() + part.end(), True))
     return found
+
+
+def find_numbers(text: str) -> list[Decimal]:
+    return [r.value for r in number_readings(text)]
 
 
 def parse_money(s: str) -> Decimal | None:

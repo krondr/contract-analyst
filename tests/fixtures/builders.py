@@ -66,10 +66,17 @@ def make_scan_pdf(path: Path, pages: list[str], rotate: int = 0, noise: float = 
     return path
 
 
-def make_docx(path: Path, paragraphs: list[str]) -> Path:
+def make_multipage_tiff(path: Path, pages: list[str]) -> Path:
+    """A scanner's multi-page TIFF: one frame per text."""
+    assert cv2.imwritemulti(str(path), [cv2.cvtColor(render_text_image(t, dpi=100), cv2.COLOR_RGB2BGR) for t in pages])
+    return path
+
+
+def make_docx(path: Path, paragraphs: list[str], numbered: tuple[int, ...] = ()) -> Path:
+    """Paragraphs whose index is in `numbered` get Word's automatic numbering (style «List Number»)."""
     document = docx.Document()
-    for p in paragraphs:
-        document.add_paragraph(p)
+    for i, p in enumerate(paragraphs):
+        document.add_paragraph(p, style="List Number" if i in numbered else None)
     document.save(path)
     return path
 
@@ -106,6 +113,21 @@ def text_doc(pages: list[str], doc_id: str = "doc000000001", name: str = "mem.pd
              for i, t in enumerate(pages, start=1)]
     file = InputFile(path=name, name=name, sha256=doc_id.ljust(64, "0"), format=DocFormat.PDF, size_bytes=0)
     return DocumentText(doc_id=doc_id, file=file, pages=built, clauses=segment_clauses(built), status="ok")
+
+
+def ocr_doc(text: str, conf: dict[int, float] | None = None, words: list[str] | None = None,
+            doc_id: str = "scan00000001"):
+    """In-memory DocumentText with one OCR page. Its words are the text's tokens (or `words`), each with
+    confidence 0.97 unless `conf` maps the word's index to another value."""
+    from contract_analyst.models import DocFormat, DocumentText, InputFile, Page, PageQuality
+
+    tokens = text.split() if words is None else words
+    page = Page(number=1, method="ocr", text=text, words=[OcrWord(text=w, conf=(conf or {}).get(i, 0.97))
+                                                           for i, w in enumerate(tokens)],
+                quality=PageQuality(chars=len(text), ocr_mean_conf=0.97, low_conf_ratio=0.0))
+    file = InputFile(path="scan.pdf", name="scan.pdf", sha256=doc_id.ljust(64, "0"), format=DocFormat.PDF,
+                     size_bytes=0)
+    return DocumentText(doc_id=doc_id, file=file, pages=[page], clauses=[], status="ok")
 
 
 def acc(value, doc_id: str = "d", quote: str = "цитата", page: int = 1, clause: str | None = None):
