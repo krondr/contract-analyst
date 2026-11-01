@@ -44,6 +44,7 @@ _DATE = re.compile(r"(?<!\d)(?:(\d{1,2})\.(\d{1,2})\.(\d{4})|(\d{4})-(\d{2})-(\d
 _NUMBER = re.compile(r"(?<![\w.,])(\d{1,3}(?:[   ]\d{3})+|\d+)((?:[.,]\d+)*)(?:\s*(тыс|млн|млрд)\b)?",
                      re.IGNORECASE)
 _SCALE = {"тыс": 1000, "млн": 10**6, "млрд": 10**9}
+_FRAME = re.compile(r"\bна\s+(?:дату\s+)?$", re.IGNORECASE)
 _KEEP = (ValueStatus.ACCEPTED, ValueStatus.CONFLICT)
 
 
@@ -169,21 +170,36 @@ def grounding(pages: Iterable[tuple[str, int, str]], records: dict[str, Document
 
 
 # --- the check ------------------------------------------------------------------------------------------------
-def _supported(sentence: str, sources: Mapping[str, str]) -> bool:
+def _unframed(sentence: str, asked: frozenset[str]) -> str:
+    """Drop "на 30.10.2026" when the user asked about that date: it frames the answer and is not a claim."""
+    def drop(m: re.Match[str]) -> str:
+        framing = _date_facts(m, backing=False) & asked and _FRAME.search(sentence[:m.start()])
+        return " " if framing else m.group(0)
+
+    return _DATE.sub(drop, sentence) if asked else sentence
+
+
+def _supported(sentence: str, sources: Mapping[str, str], require_refs: bool, asked: frozenset[str]) -> bool:
     refs = [r[1:-1] for r in _REF.findall(sentence)]
     if any(r not in sources for r in refs):
         return False
-    claims = _facts(_REF.sub(" ", sentence))
-    if not claims:
-        return True
-    return bool(refs) and claims <= frozenset().union(*(_facts(sources[r], backing=True) for r in refs))
+    claims = _facts(_unframed(_REF.sub(" ", sentence), asked))
+    if not refs:
+        return not claims and not (require_refs and re.search(r"\w", sentence))
+    return claims <= frozenset().union(*(_facts(sources[r], backing=True) for r in refs))
 
 
-def verify_text(text: str, sources: Mapping[str, str]) -> tuple[str, int]:
-    """Drop the sentences the cited sources do not back; return the rest and how many were dropped."""
+def verify_text(text: str, sources: Mapping[str, str], require_refs: bool = False,
+                question: str = "") -> tuple[str, int]:
+    """Drop the sentences the cited sources do not back; return the rest and how many were dropped.
+
+    require_refs: every statement needs a reference, not only one with numbers (chat answers).
+    question: a date the user asked about may frame the answer ("на 30.10.2026 ...") without a source.
+    """
+    asked = frozenset(f for f in _facts(question) if f.startswith("date:"))
     kept, removed = [], 0
     for part in split_sentences(text):
-        if not part.strip() or _supported(part.strip(), sources):
+        if not part.strip() or _supported(part.strip(), sources, require_refs, asked):
             kept.append(part)
         else:
             removed += 1

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import operator
+import re
 import sqlite3
 from pathlib import Path
 from typing import Annotated, TypedDict
@@ -61,5 +62,6 @@ class ChatSession:
     def ask(self, question: str, thread: str) -> str:
         state = self.graph.invoke({"messages": [{"role": "user", "content": question}], "rounds": 0},
                                   config={"configurable": {"thread_id": thread}, "recursion_limit": 40})
-        answer, _ = verify_text(state["messages"][-1].get("content") or "", self._sources)
-        return answer or REFUSAL
+        answer, _ = verify_text(state["messages"][-1].get("content") or "", self._sources, require_refs=True,
+                                question=question)
+        return answer if re.search(r"\w", answer) else REFUSAL

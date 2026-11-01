@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from contract_analyst.kb.store import KnowledgeBase
 from contract_analyst.labels import STATUS_RU
-from contract_analyst.models import Source, ValueStatus
+from contract_analyst.models import ConsolidatedContract, DocumentRecord, OpType, Source, ValueStatus
 from contract_analyst.report.render import money
 
 
@@ -44,19 +44,44 @@ class IssuesArgs(ChatArgs):
     contract_number: str | None = None
 
 
+def _doc_ref(record: DocumentRecord | None) -> str:
+    """Where a document states its start: effective date, else its date, else its number."""
+    fields = (record.effective_from, record.doc_date, record.number) if record else ()
+    return _ref(next((f.source for f in fields if f.status == ValueStatus.ACCEPTED and f.source), None))
+
+
+def _status_ref(kb: KnowledgeBase, c: ConsolidatedContract, records: dict[str, DocumentRecord]) -> str:
+    """The source of the status: the termination or suspension that set it, else the date of the main contract."""
+    chain = next((ch for ch in kb.chains() if ch.contract_number == c.contract_number), None)
+    if chain is None:
+        return ""
+    kind = {"terminated": OpType.TERMINATE, "partially_suspended": OpType.SUSPEND_PART}.get(c.status)
+    ops = [op for d in chain.docs if not d.invalidated_by and d.doc_id in records for op in records[d.doc_id].ops
+           if op.op == kind and op.status == ValueStatus.ACCEPTED]
+    return _ref(ops[-1].source if ops else chain.main_date.source if chain.main_date else None)
+
+
 def contract_terms(kb: KnowledgeBase, a: TermsArgs) -> dict:
     c = kb.get_contract_terms(a.contract_number, a.as_of)
     if c is None:
         return {"error": f"договора {a.contract_number} нет в базе"}
-    return {"contract": c.contract_number, "as_of": c.as_of, "status": STATUS_RU.get(c.status, c.status),
+    records = kb.records()
+    return {"contract": c.contract_number, "as_of": c.as_of,
+            "status": f"{STATUS_RU.get(c.status, c.status)} {_status_ref(kb, c, records)}".strip(),
             "status_since": c.status_since,
             "terms": {k: f"{v.current.value} {_ref(v.current.source)}" for k, v in c.terms.items()
                       if v.current.status == ValueStatus.ACCEPTED},
             "rates": [f"{r.label}: {money(r.amount)} руб. ({r.vat}) с {r.valid_from or '—'} по {r.valid_to or '—'} "
                       f"{_ref(r.source)}" for r in c.rates],
             "planned_rates": [f"{r.label}: {money(r.amount)} руб. с {r.valid_from} {_ref(r.source)}" for r in c.planned_rates],
-            "documents": [f"{e.number or e.doc_id} с {e.when or '—'}: {e.summary}{' (отменён)' if e.invalidated else ''}"
-                          for e in c.timeline]}
+            "documents": [f"{e.number or e.doc_id} с {e.when or '—'}: {e.summary}{' (отменён)' if e.invalidated else ''} "
+                          f"{_doc_ref(records.get(e.doc_id))}".strip() for e in c.timeline]}
+
+
+def contracts(kb: KnowledgeBase, a: ChatArgs) -> dict:
+    records = kb.records()
+    return {"contracts": [{**c, "source": _ref(records[c["main_doc_id"]].number.source)
+                           if c["main_doc_id"] in records else ""} for c in kb.list_contracts()]}
 
 
 def term_history(kb: KnowledgeBase, a: HistoryArgs) -> dict:
@@ -84,7 +109,7 @@ class ChatTool:
 
 CHAT_TOOLS = {t.name: t for t in [
     ChatTool("list_contracts", "Список договоров в базе: номер, статус, кластер, число документов.", ChatArgs,
-             lambda kb, a: {"contracts": kb.list_contracts()}),
+             contracts),
     ChatTool("get_contract_terms", "Действующие условия, ставки и документы договора на дату.", TermsArgs, contract_terms),
     ChatTool("get_term_history", "История изменения одного условия договора.", HistoryArgs, term_history),
     ChatTool("search_clauses", "Поиск по тексту пунктов договоров (с учётом словоформ).", SearchArgs, search),
