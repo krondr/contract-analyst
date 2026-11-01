@@ -171,3 +171,37 @@ def test_quote_found_on_another_page():
     script = ['{"rates": [{"label": "Ставка", "amount": "700", "page": 1, "quote": "составляет 700 рублей без НДС"}]}']
     rec = understand_document(doc, HeaderGuess(), ScriptedClient(script), load_settings(), ["money"])
     assert rec.rates[0].status == "accepted" and rec.rates[0].source.page == 2
+
+
+def _header_ids(doc):
+    return [c.clause_id for b in select_clauses(doc, "header", load_settings()) for c in b]
+
+
+TERM_LATE = ("Договор № D990000001-01\nг. Тверь 21.01.2021\n"
+             + "\n".join(f"{i}. Условие номер {i} без дат." for i in range(1, 11))
+             + "\n11. Настоящий Договор вступает в силу с 01.04.2021 и действует до 31.12.2026.\n12. Реквизиты сторон.")
+
+
+def test_header_reads_the_clause_where_the_document_states_its_own_term():
+    ids = _header_ids(text_doc([TERM_LATE]))
+    assert ids[:3] == ["preamble", "1", "2"] and "11" in ids and "12" not in ids
+
+
+def test_header_skips_a_term_that_is_only_quoted_new_wording():
+    text = ("Дополнительное соглашение № D990000002-01\nк Договору № D990000001-01 от 21.01.2021\n"
+            "1. Стороны договорились о следующем.\n2. Обязательства сторон сохраняются.\n"
+            "3. Пункт 7.1 Договора изложить в следующей редакции: «7.1. Договор действует до 31.12.2027».\n"
+            "4. Настоящее Соглашение вступает в силу с 01.01.2027.")
+    ids = _header_ids(text_doc([text]))
+    assert "4" in ids and "3" not in ids
+
+
+def test_a_later_header_batch_fills_a_field_the_first_did_not_find():
+    long_subject = "1. Предмет договора: " + "оказание услуг по уборке помещений; " * 700
+    doc = text_doc([(f"Договор № D990000001-01\nг. Тверь 21.01.2021\n{long_subject}\n2. Обязанности сторон.\n"
+                     "9. Настоящий Договор вступает в силу с 01.04.2021.")])
+    batches = len(select_clauses(doc, "header", load_settings()))
+    assert batches > 1
+    start = {"value": "2021-04-01", "page": 1, "quote": "Настоящий Договор вступает в силу с 01.04.2021"}
+    rec = _understand(doc, [_header_json()] * (batches - 1) + [_header_json(effective_from=start)], groups=["header"])
+    assert (rec.effective_from.status, rec.effective_from.value) == ("accepted", date(2021, 4, 1))

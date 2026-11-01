@@ -155,8 +155,10 @@ def _run_group(acc: _Acc, doc: DocumentText, group: str, client: LLMClient, sett
             continue
         if group == "header":
             acc.header = acc.header or out
-            for field, kind in _HEADER_KINDS.items():
-                acc.header_values.setdefault(field, _gate_value(field, getattr(out, field), kind, doc, settings))
+            for field, kind in _HEADER_KINDS.items():  # a later batch fills what the earlier ones did not find
+                found = acc.header_values.get(field)
+                if found is None or found.status == ValueStatus.ABSENT:
+                    acc.header_values[field] = _gate_value(field, getattr(out, field), kind, doc, settings)
             acc.parties = acc.parties or [
                 Party(role=p.role, org_type=_gate_value("org_type", p.org_type, "text", doc, settings),
                       name=_gate_value("name", p.name, "text", doc, settings)) for p in out.parties]

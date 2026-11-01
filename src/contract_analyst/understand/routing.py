@@ -22,6 +22,13 @@ _SUPPLEMENT_OPS = re.compile(
     r"|утратившим\s+силу|недействительн|отменить|прекращ|прекрат|приостанов|расторг|вступает в силу|распространяет",
     re.IGNORECASE | re.DOTALL)
 _FEW_CLAUSES = 2
+# Where a document states its own start or end, usually near its end: «Настоящее Соглашение вступает в силу с …»,
+# «Договор действует до …», «Срок действия Договора …».
+_OWN_TERM = re.compile(
+    r"вступа\w*\s+в\s+(?:законную\s+)?силу"
+    r"|(?:договор|соглашени|контракт)\w*[^.;]{0,80}?\b(?:действу\w*|заключ\w*)\s+(?:с|до|по|на\s+срок|сроком)\b"
+    r"|срок\w*\s+действия\s+(?:настоящ\w+\s+)?(?:договор|соглашени|контракт)",
+    re.IGNORECASE)
 
 
 def estimate_tokens(clauses: list[Clause]) -> int:
@@ -50,6 +57,12 @@ def _quoted(text: str) -> list[tuple[int, int]]:
     return pairs
 
 
+def _states_own_term(text: str) -> bool:
+    """The clause says when the document itself starts or ends, not only inside a quoted new wording of a clause."""
+    quoted = _quoted(text)
+    return any(not any(a < m.start() < b for a, b in quoted) for m in _OWN_TERM.finditer(text))
+
+
 def _supplement_ops(doc: DocumentText) -> list[Clause]:
     if sum(c.clause_id != "preamble" for c in doc.clauses) <= _FEW_CLAUSES:
         return list(doc.clauses)  # (almost) unsegmented, e.g. Word auto-numbering: the whole short document
@@ -66,9 +79,10 @@ def _supplement_ops(doc: DocumentText) -> list[Clause]:
 def _chosen(doc: DocumentText, group: str, supplement: bool) -> list[Clause]:
     if group == "ops" and supplement:
         return _supplement_ops(doc)
-    if group == "header":
-        numbered = [c for c in doc.clauses if c.clause_id != "preamble"][:2]
-        return [c for c in doc.clauses if c.clause_id == "preamble"] + numbered
+    if group == "header":  # the preamble, the first clauses, and wherever the document states its own term
+        numbered = [c for c in doc.clauses if c.clause_id != "preamble"]
+        return ([c for c in doc.clauses if c.clause_id == "preamble"] + numbered[:2]
+                + [c for c in numbered[2:] if _states_own_term(c.text)])
     pattern = re.compile(KEYWORDS[group], re.IGNORECASE)
     picked = [c for c in doc.clauses if pattern.search(c.text)]
     if group == "ops":
