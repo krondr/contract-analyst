@@ -167,3 +167,13 @@ def test_clause_references_normalize_to_one_form(a, b):
                                   ("D990000003-01", "D990000004-01"), ("п. 3.1", None)])
 def test_different_clause_references_stay_different(a, b):
     assert normalize_target(a) != normalize_target(b)
+
+
+def test_contract_the_run_did_not_fold_is_not_refolded_by_code(tmp_path):
+    import json
+
+    run = make_run(tmp_path)
+    (run / "kb" / "consolidated.json").write_text("{}")  # e.g. the single-call variant skipped this contract
+    (run / "metrics.json").write_text(json.dumps({"as_of": AS_OF.isoformat()}))
+    assert score_run(run, golden()).consolidation_acc == 0.0
+    assert {t.trap_id: t.passed for t in check_traps(run, golden())}["T5"] is False

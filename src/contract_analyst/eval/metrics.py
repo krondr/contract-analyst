@@ -14,7 +14,7 @@ from contract_analyst.eval.golden import GoldenRate, GoldenSet
 from contract_analyst.ingest.normalize import normalize_text
 from contract_analyst.kb.lemmatize import lemmatize
 from contract_analyst.kb.store import KnowledgeBase
-from contract_analyst.models import DocumentRecord, Extracted, ValueStatus
+from contract_analyst.models import ConsolidatedContract, DocumentRecord, Extracted, ValueStatus
 from contract_analyst.parsing.patterns import DOC_NUMBER_RE, find_dates
 
 SCALAR_FIELDS = {"number": "number", "doc_date": "doc_date", "effective_from": "effective_from"}
@@ -224,11 +224,38 @@ def _critical(golden: GoldenSet, records: dict[str, DocumentRecord]) -> _Tally:
     return tally
 
 
-def _consolidation(golden: GoldenSet, kb: KnowledgeBase) -> float:
+def _own_as_of(run_dir: Path) -> date | None:
+    try:
+        return date.fromisoformat(json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))["as_of"])
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+class RunsAt:
+    """Where each golden date is scored from: the run made for that date, else the primary run.
+
+    On its own date a run is judged by what it folded itself; only other dates are recomputed by the code fold,
+    which is a fair answer for a code-fold run and nobody else's.
+    """
+
+    def __init__(self, primary: Path, runs_at: dict[date, Path] | None = None) -> None:
+        self.primary = Path(primary)
+        self.runs_at = {when: Path(p) for when, p in (runs_at or {}).items()}
+
+    def terms(self, number: str, when: date) -> ConsolidatedContract | None:
+        run = self.runs_at.get(when, self.primary)
+        kb = KnowledgeBase(run / "kb")
+        if _own_as_of(run) != when:
+            return kb.get_contract_terms(number, when)
+        stored = kb.consolidated().get(number)
+        return stored if stored is not None and stored.as_of == when else None
+
+
+def _consolidation(golden: GoldenSet, runs: RunsAt) -> float:
     points = earned = 0
     for chain in golden.chains:
         for when in golden.as_of_dates:
-            result = kb.get_contract_terms(chain.contract_number, when)
+            result = runs.terms(chain.contract_number, when)
             if when in chain.status_at:
                 points += 1
                 earned += bool(result and result.status == chain.status_at[when])
@@ -253,7 +280,8 @@ def _usage(run_dir: Path) -> dict:
     return metrics
 
 
-def score_run(run_dir: Path, golden: GoldenSet) -> Scores:
+def score_run(run_dir: Path, golden: GoldenSet, runs_at: dict[date, Path] | None = None) -> Scores:
+    """Score a run; runs_at gives the run made for each golden date (an experiment runs every variant per date)."""
     from contract_analyst.eval.traps import check_traps
 
     kb = KnowledgeBase(Path(run_dir) / "kb")
@@ -265,7 +293,7 @@ def score_run(run_dir: Path, golden: GoldenSet) -> Scores:
         chain_ok.append(bool(c and c.main_doc_id == g.main_doc_id and [d.doc_id for d in c.docs] == g.order))
     tally = _critical(golden, records)
     clusters = {(c.subject_category, frozenset(c.members)) for c in kb.clusters()}
-    traps = check_traps(Path(run_dir), golden)
+    traps = check_traps(Path(run_dir), golden, runs_at)
     usage = _usage(Path(run_dir))
     llm = usage.get("llm_usage", {})
     invalid = sum(1 for r in records.values() for i in r.issues if i.code == "llm_invalid_json")
@@ -274,7 +302,7 @@ def score_run(run_dir: Path, golden: GoldenSet) -> Scores:
         chain_acc=sum(chain_ok) / len(chain_ok) if chain_ok else 1.0,
         critical_total=tally.total, critical_accepted_correct=tally.correct, critical_accepted_wrong=tally.wrong,
         critical_coverage=tally.correct / tally.total if tally.total else 1.0,
-        consolidation_acc=_consolidation(golden, kb),
+        consolidation_acc=_consolidation(golden, RunsAt(run_dir, runs_at)),
         clusters_match=clusters == {(c.category, frozenset(c.members)) for c in golden.clusters},
         traps_passed=sum(t.passed for t in traps), traps_total=len(traps),
         wall_seconds=usage.get("seconds", 0.0), llm_calls=llm.get("calls", 0),
@@ -283,4 +311,4 @@ def score_run(run_dir: Path, golden: GoldenSet) -> Scores:
         tool_call_valid_rate=usage["tool_call_valid_rate"], safety_net=usage.get("safety_net", []))
 
 
-__all__ = ["GoldenRate", "Scores", "same_value", "score_run", "similar_text"]
+__all__ = ["GoldenRate", "RunsAt", "Scores", "normalize_target", "same_value", "score_run", "similar_text"]
