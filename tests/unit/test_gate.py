@@ -343,3 +343,27 @@ def test_effective_date_taken_from_a_reference_is_rejected():
     r = apply_gate(Candidate(field="effective_from", value="2023-06-02", kind="date", page=1,
                              quote="к Договору № D990000001-01 от 02.06.2023"), doc, load_settings())
     assert r.status == "rejected" and r.reason.startswith("date_role")
+
+
+@pytest.mark.parametrize("op", ["replace_clause", "delete_clause", "replace_appendix", "restate_section", "add_clause"])
+def test_clause_operation_without_a_target_is_rejected(op):
+    text = "1. Изложить в новой редакции с 01.07.2026 следующим образом: «Арендная плата составляет 120 000 рублей»."
+    r = gate_op(OpOut(op=op, effective_from="2026-07-01", page=1, quote="Изложить в новой редакции с 01.07.2026"),
+                text_doc([text]), load_settings())
+    assert r.status == "rejected" and r.reason.startswith("no_target")
+
+
+def test_vat_is_kept_only_where_the_document_states_it():
+    s = load_settings()
+
+    def vat(page_text, quote, label="Ставка вознаграждения", said="excluded"):
+        r = gate_rate(RateOut(label=label, amount="500", vat=said, page=1, quote=quote), text_doc([page_text]), s)
+        assert r.status == "accepted"
+        return r.vat
+
+    assert vat("Ставка вознаграждения составляет 500 рублей без НДС.",
+               "Ставка вознаграждения составляет 500 рублей без НДС") == "excluded"
+    assert vat("Ставка вознаграждения составляет 500 рублей.", "Ставка вознаграждения составляет 500 рублей") == "unknown"
+    assert vat("Ставки, руб. без учета НДС\nТариф А 500\nТариф Б 800", "Тариф А 500", label="Тариф А") == "excluded"
+    assert vat("Ставка вознаграждения составляет 500 рублей, включая НДС.",
+               "Ставка вознаграждения составляет 500 рублей, включая НДС") == "unknown"

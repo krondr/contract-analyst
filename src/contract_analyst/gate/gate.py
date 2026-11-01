@@ -180,6 +180,24 @@ def _reanchor(row: RateOut, amount: Decimal, doc: DocumentText) -> list[str]:
     return [quote for _, _, quote in places]
 
 
+_VAT_SAID = {
+    "excluded": re.compile(r"без\s+(?:учёта\s+|учета\s+)?ндс|ндс\s+не\s+облага|не\s+облага\w*\s+ндс"),
+    "included": re.compile(r"(?:с\s+учётом|с\s+учетом|включая|в\s+т\.\s*ч\.|в\s+том\s+числе)\s+ндс|\bс\s+ндс|ндс\s+включ"),
+}
+_VAT_CONTEXT = 400  # characters above the row: the table header that states VAT for its rows
+
+
+def _vat_stated(vat: str, quote: str, page: Page) -> bool:
+    """The VAT treatment the model gave is said in the quote or in the text just above it on the page."""
+    pattern = _VAT_SAID.get(vat)
+    if pattern is None:
+        return True  # "unknown" claims nothing
+    text, q = page.text.casefold(), quote.casefold().strip()
+    at = text.find(q[:40]) if q else -1
+    context = q + "\n" + (text[max(0, at - _VAT_CONTEXT):at] if at >= 0 else "")
+    return bool(pattern.search(context))
+
+
 def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
     amount = parse_money(row.amount)
     places: list[str] = []
@@ -215,7 +233,14 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
 
     if failed := _first_failure(checks()):
         return RateRow(**base, status=_status(failed), reason=_reason(failed))
+    if not _vat_stated(row.vat, row.quote or "", page):
+        base["vat"] = "unknown"  # the amount stands; a VAT treatment the document does not state does not
     return RateRow(**base, status=ValueStatus.ACCEPTED, reason="quote_reanchored" if places else None)
+
+
+# An operation on a clause that does not say which clause cannot be applied: the fold would have to guess.
+_NEEDS_TARGET = {OpType.REPLACE_CLAUSE, OpType.DELETE_CLAUSE, OpType.REPLACE_APPENDIX, OpType.RESTATE_SECTION,
+                 OpType.ADD_CLAUSE}
 
 
 def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
@@ -233,6 +258,9 @@ def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
     def checks() -> Iterator[CheckResult]:
         found, spans = locate_quote(op.quote, page, settings.ocr_quote_fuzzy_threshold)
         yield found
+        if op.op in _NEEDS_TARGET and not (op.target or "").strip():
+            yield CheckResult(ok=False, code="no_target",
+                              reason="не указано, какой пункт, раздел или приложение меняет операция")
         yield check_ocr_confidence(op.quote, page, threshold)
         if op.op == OpType.INVALIDATE_DOCUMENT:
             yield check_value_in_quote(op.target or "", op.quote, "doc_number")
