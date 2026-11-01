@@ -8,6 +8,14 @@ def test_defaults_and_overrides():
     assert load_settings(llm_model="ollama:qwen3:14b").llm_model == "ollama:qwen3:14b"
 
 
+def test_every_llm_call_is_bounded_by_default():
+    s = load_settings()
+    # A capped answer plus a full clause batch still fits the context window, so the cap ends a runaway answer
+    # before Ollama starts shifting the context.
+    assert s.llm_max_tokens + s.llm_batch_tokens + 2000 <= s.llm_num_ctx
+    assert 0 < s.llm_think_max_tokens < s.llm_num_ctx and s.llm_keep_alive and s.llm_call_deadline > 0
+
+
 def test_every_grouped_field_has_a_description():
     s = load_settings()
     fields = {f for group in s.field_groups.values() for f in group}

@@ -200,7 +200,7 @@ def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None =
             skipped.append(doc_id)
             continue
         for issue in record.issues:
-            if issue.code in ("llm_invalid_json", "llm_timeout"):
+            if issue.code in ("llm_invalid_json", "llm_timeout", "llm_truncated"):
                 ctx.trace.event("error", "tools", doc_id=doc_id, message=f"{issue.code}: {issue.message}")
         if groups and doc_id in ctx.records:
             record = _merge_records(ctx.records[doc_id], record, groups)

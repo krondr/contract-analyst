@@ -34,6 +34,8 @@ class FaultyClient:
         self.usage["calls"] += 1
         if self.fault == "timeout":
             raise TimeoutError("model did not answer in time")
+        if self.fault == "truncated":  # a degenerate answer cut at the token cap, every time
+            return '{"number": {"value": "D990000002-01", "quote": "повтор повтор повтор'
         return "это не JSON"
 
 
@@ -110,6 +112,13 @@ def test_llm_timeout(package, tmp_path):
     r = run(package, tmp_path, client=FaultyClient("timeout", [analyze_all("ДС1.pdf")]))
     assert "llm_timeout" in section(r.report_path, "## 5. Отказы и противоречия", "## 6.")
     assert any("timeout" in str(e.get("message", "")).lower() for e in _errors(r))
+
+
+def test_answer_cut_at_the_token_cap_is_refused_not_guessed(package, tmp_path):
+    r = run(package, tmp_path, client=FaultyClient("truncated", [analyze_all("ДС1.pdf")]))
+    refusals = section(r.report_path, "## 5. Отказы и противоречия", "## 6.")
+    assert "llm_truncated" in refusals and "llm_invalid_json" not in refusals
+    assert "повтор повтор" not in r.report_path.read_text(encoding="utf-8")  # nothing from the cut answer is used
 
 
 def test_tool_exception_does_not_stop_the_run(package, tmp_path, monkeypatch):

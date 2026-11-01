@@ -18,6 +18,10 @@ class Settings(BaseModel):
     ollama_url: str = "http://localhost:11434"
     llm_num_ctx: int = 16384
     llm_batch_tokens: int = 6000
+    llm_max_tokens: int = 4096
+    llm_think_max_tokens: int = 4096
+    llm_keep_alive: str = "30m"
+    llm_call_deadline: float = 900
     llm_cache_mode: Literal["record", "replay", "off"] = "record"
     ocr_engine: Literal["tesseract", "rapidocr"] = "tesseract"
     ocr_preprocess: Literal["none", "deskew_sauvola"] = "none"

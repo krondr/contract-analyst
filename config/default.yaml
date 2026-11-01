@@ -3,6 +3,14 @@ llm_model: "ollama:qwen3:8b"          # E2
 ollama_url: "http://localhost:11434"   # overridden by CA_OLLAMA_URL
 llm_num_ctx: 16384
 llm_batch_tokens: 6000
+# Output caps. Ollama's own default is unlimited with context shifting, so a degenerate answer streams forever.
+# A field group's JSON rarely needs 2000 tokens: 4096 leaves 2x headroom, and a full batch (6000) + prompt (~1500)
+# + 4096 stays inside num_ctx, so even a capped answer never shifts the context.
+llm_max_tokens: 4096                   # every call without thinking: extraction, planner, reflector, chat
+llm_think_max_tokens: 4096             # a thinking turn: thinking + tool calls; ~3 min at ~25 tok/s. Too low a cap
+                                       # cuts the tool calls off (the turn ends empty): watch llm_usage.truncated
+llm_keep_alive: 30m                    # keep the model loaded between the calls of a run
+llm_call_deadline: 900                 # seconds per call, wall clock: then the stream is closed and Ollama aborts
 llm_cache_mode: record                 # record | replay | off
 
 ocr_engine: tesseract                  # E1: tesseract | rapidocr
