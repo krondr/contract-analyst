@@ -389,7 +389,10 @@ def check_not_redacted(quote: str | None, value: str | None) -> CheckResult:
 
 # The role a date plays is read from the words right before it: «вступает в силу с», «до», «к Договору № … от».
 _ROLE_CUT = re.compile(r"[«»\"“”„]")
-_REFERENCE_BEFORE = re.compile(r"\b(?:к|по|в|о\s+расторжении)\s+(?:договор\w*|соглашени\w*|контракт\w*)\b[^.;]{0,70}?\bот\s*$")
+# «к Агентскому договору» names another contract; «к настоящему Соглашению» names the document itself.
+_ADJECTIVES = r"(?:(?!настоящ)[а-яё-]+(?:ому|ему|ой|ым)\s+){0,2}"
+_REFERENCE_BEFORE = re.compile(rf"\b(?:к|по|в|о\s+расторжении)\s+{_ADJECTIVES}(?:договор\w*|соглашени\w*|контракт\w*)\b"
+                               r"[^.;]{0,70}?\bот\s*$")
 _START_BEFORE = re.compile(r"(?:\bс|\bсо|вступ\w*\s+в\s+силу(?:\s+с)?)\s*[:—-]?\s*$")
 _START_CONTEXT = re.compile(r"вступ\w*\s+в\s+силу|распространя\w*|применя\w*\s+с\b|действ\w*\s+с\b")
 _END_BEFORE = re.compile(r"(?:\bдо|\bпо|окончани\w*|истечени\w*|срок\w*\s+действи\w*)\s*[:—-]?\s*$")
@@ -401,7 +404,7 @@ _IN_FORCE_CUE = re.compile(r"вступ\w*\s+в\s+силу|распростра�
 # A supplement belongs to the contract it is «к», «в», «о расторжении» of; a definition that only names another
 # contract («ДКП – Договор …, заключенный … № …») is a mention, not a parent.
 _PARENT_ANCHOR = re.compile(r"\b(?:к|в|во|о\s+расторжении|о\s+внесении\s+изменений\s+в)\s+(?:настоящ\w+\s+)?"
-                            r"(?:договор\w*|соглашени\w*|контракт\w*)", re.IGNORECASE)
+                            rf"{_ADJECTIVES}(?:договор\w*|соглашени\w*|контракт\w*)", re.IGNORECASE)
 
 
 def check_parent_role(field: str, value: str | None, quote: str | None) -> CheckResult:

@@ -442,3 +442,27 @@ def test_percent_rate_keeps_its_unit():
     rub = gate_rate(RateOut(label="Ставка", amount="500", page=1, quote="Ставка 500 рублей"),
                     text_doc(["Ставка 500 рублей."]), load_settings())
     assert rub.unit == "RUB"
+
+
+@pytest.mark.parametrize("adjective", ["Агентскому", "Дилерскому", "Лицензионному", "Партнёрскому"])
+def test_parent_contract_named_with_an_adjective_is_the_parent(adjective):
+    reference = f"к {adjective} договору № D990000001-01 от 10.01.2024 г."
+    doc = text_doc([f"Дополнительное соглашение № D990000002-01\n{reference}\nг. Тверь 15.10.2026 г."])
+    r = apply_gate(Candidate(field="parent_number", value="D990000001-01", kind="doc_number", page=1, quote=reference),
+                   doc, load_settings())
+    assert r.status == "accepted", r.reason
+
+
+@pytest.mark.parametrize("adjective", ["Агентскому", "Дилерскому", "Лицензионному", "Партнёрскому"])
+def test_date_of_a_parent_named_with_an_adjective_is_not_the_signing_date(adjective):
+    title = f"Дополнительное соглашение № D990000002-01 к {adjective} договору № D990000001-01 от 10.01.2024 г."
+    r = apply_gate(Candidate(field="doc_date", value="2024-01-10", kind="date", page=1, quote=title),
+                   text_doc([title + "\nг. Тверь 15.10.2026 г."]), load_settings())
+    assert r.status == "rejected" and r.reason.startswith("date_role")
+
+
+def test_document_date_after_a_reference_to_the_document_itself_is_accepted():
+    quote = "Приложение № 1 к настоящему Соглашению № D990000002-01 от 15.10.2026"
+    r = apply_gate(Candidate(field="doc_date", value="2026-10-15", kind="date", page=1, quote=quote),
+                   text_doc([quote + "\nСтавки вознаграждения"]), load_settings())
+    assert r.status == "accepted", r.reason
