@@ -148,6 +148,11 @@ def _accepted(ext: Extracted):
     return ext.value.isoformat() if isinstance(ext.value, date) else ext.value
 
 
+def _accepted_rows(rows: list) -> list:
+    """Only accepted rows count: a fold's conflict or rejected value is not an answer."""
+    return [r for r in rows if r.status == ValueStatus.ACCEPTED]
+
+
 def _rate_set(rates) -> set[tuple]:
     return {(Decimal(r.amount).normalize(), r.vat, r.valid_from, r.valid_to) for r in rates}
 
@@ -261,11 +266,12 @@ def _consolidation(golden: GoldenSet, runs: RunsAt) -> float:
                 earned += bool(result and result.status == chain.status_at[when])
             if when in chain.rates_at:
                 points += 1
-                earned += bool(result and _rate_set(result.rates) == _rate_set(chain.rates_at[when]))
+                earned += bool(result and _rate_set(_accepted_rows(result.rates)) == _rate_set(chain.rates_at[when]))
             for term, value in chain.terms_at.get(when, {}).items():
                 points += 1
                 state = result.terms.get(term) if result else None
-                earned += bool(state and similar_text(value, state.current.value))
+                accepted = state is not None and state.current.status == ValueStatus.ACCEPTED
+                earned += accepted and similar_text(value, state.current.value)
     return earned / points if points else 1.0
 
 

@@ -9,8 +9,9 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from contract_analyst.eval.golden import GoldenSet, GoldenTrap
-from contract_analyst.eval.metrics import RunsAt, same_value, similar_text
+from contract_analyst.eval.metrics import RunsAt, _accepted_rows, same_value, similar_text
 from contract_analyst.kb.store import KnowledgeBase
+from contract_analyst.models import ValueStatus
 
 
 class TrapResult(BaseModel):
@@ -39,11 +40,11 @@ def _check(trap: GoldenTrap, kb: KnowledgeBase, runs: RunsAt) -> tuple[bool, str
     if trap.kind == "term_value_at":
         result = runs.terms(trap.contract_number, date.fromisoformat(str(e["as_of"])))
         state = result.terms.get(e["term"]) if result else None
-        got = state.current.value if state else None
+        got = state.current.value if state and state.current.status == ValueStatus.ACCEPTED else None
         return similar_text(e["value"], got), f"value: {got}"
     if trap.kind == "rate_planned":
         result = runs.terms(trap.contract_number, date.fromisoformat(str(e["as_of"])))
-        planned = result.planned_rates if result else []
+        planned = _accepted_rows(result.planned_rates) if result else []
         hit = any(Decimal(str(r.amount)) == Decimal(str(e["amount"]).replace(",", ".")) for r in planned)
         return hit, f"planned: {[str(r.amount) for r in planned]}"
     if trap.kind == "doc_kind_is":

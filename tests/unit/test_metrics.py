@@ -177,3 +177,25 @@ def test_contract_the_run_did_not_fold_is_not_refolded_by_code(tmp_path):
     (run / "metrics.json").write_text(json.dumps({"as_of": AS_OF.isoformat()}))
     assert score_run(run, golden()).consolidation_acc == 0.0
     assert {t.trap_id: t.passed for t in check_traps(run, golden())}["T5"] is False
+
+
+def test_values_the_fold_did_not_accept_score_nothing(tmp_path):
+    from pydantic import TypeAdapter
+
+    from contract_analyst.models import ConsolidatedContract
+    from tests.fixtures.builders import acc
+
+    run = make_run(tmp_path, tweak=lambda records: records["s"].terms.update(validity=acc("до 31.12.2026", "s")))
+    contract = KnowledgeBase(run / "kb").consolidated()[MAIN]
+    contract.terms["validity"].current.status = "conflict"
+    for row in [*contract.rates, *contract.planned_rates]:
+        row.status = "conflict"
+    adapter = TypeAdapter(dict[str, ConsolidatedContract])
+    (run / "kb" / "consolidated.json").write_bytes(adapter.dump_json({MAIN: contract}))
+    gs = golden()
+    gs.chains[0].terms_at = {AS_OF: {"validity": "до 31.12.2026"}}
+    gs.traps.append(GoldenTrap(trap_id="T7", kind="term_value_at", contract_number=MAIN,
+                               expected={"as_of": "2026-10-30", "term": "validity", "value": "до 31.12.2026"}))
+    assert score_run(run, gs).consolidation_acc == 1 / 3  # only the status is right
+    traps = {t.trap_id: t.passed for t in check_traps(run, gs)}
+    assert traps["T5"] and not traps["T9"] and not traps["T7"]
