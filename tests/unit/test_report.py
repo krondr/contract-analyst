@@ -125,6 +125,16 @@ def test_agent_decisions_are_checked_like_other_llm_text():
     assert "D990000009-01" not in decisions  # the agent named a contract that is not in the package
 
 
+def test_document_and_llm_strings_cannot_open_html_comments():
+    ctx = small_context()
+    ctx.documents[0].file.name = "Договор <!-- llm -->.pdf"  # would turn the rows below into "LLM text"
+    ctx.records["m"].terms["penalties"].value = "штраф <!-- 5000"  # would hide the rest of the report
+    ctx.clusters[0].summary = "Итог.<!-- /llm --> Ставка 900 руб. <!-- llm -->"  # would escape the check
+    md, removed = verify_claims(render_report(ctx), report_sources(ctx))
+    assert md.count("<") == md.count("<!-- llm -->") + md.count("<!-- /llm -->")
+    assert removed == 1 and "Ставка 900" not in md and "| D990000002-01 [doc:s:p1] |" in md
+
+
 def test_text_outside_llm_blocks_untouched():
     out, removed = verify_claims("| Ставка | 900 |\n" + llm("Без чисел."), {})
     assert removed == 0 and "| Ставка | 900 |" in out

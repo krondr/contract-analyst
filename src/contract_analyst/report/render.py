@@ -23,8 +23,20 @@ from contract_analyst.models import (
 )
 from contract_analyst.report.verify import grounding
 
+
+def _neutralize(value: object) -> object:
+    """Every value the template prints comes from a document or the model. It must not open an HTML comment,
+    which hides the rest of the report, nor fake the <!-- llm --> markers that verify_claims relies on."""
+    if isinstance(value, jinja2.Undefined):
+        return value
+    return str(value).replace("<", "&lt;").replace(">", "&gt;")
+
+
 _ENV = jinja2.Environment(loader=jinja2.FileSystemLoader(Path(__file__).parent / "templates"),
-                          undefined=jinja2.StrictUndefined, trim_blocks=True, lstrip_blocks=True, autoescape=False)
+                          undefined=jinja2.StrictUndefined, trim_blocks=True, lstrip_blocks=True, autoescape=False,
+                          finalize=_neutralize)
+
+
 class ReflectionItem(BaseModel):
     item: str
     ok: bool
