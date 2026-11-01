@@ -46,6 +46,12 @@ _OPERATIVE = {
     OpType.TERMINATE: [rf"расторг(?:нуть|ается|аются|нут\w*)|{_STOPS}|{_AGREED_ON}(?:расторжени\w*|прекращени\w*)"],
     OpType.SUSPEND_PART: [rf"{_STOPS}|приостан(?:овить|овлен\w*|авлива\w*)|{_AGREED_ON}(?:прекращени\w*|приостановлени\w*)"],
     OpType.RESTATE_DOCUMENT: [r"изложить|излага(?:ется|ются)|изложен\w*|читать|принять", r"редакци"],
+    # A clause operation is stated by its own verb: a sentence that merely names a clause does not change it.
+    OpType.REPLACE_CLAUSE: [r"излож\w*|излага\w*|читать|замени\w*|редакци"],
+    OpType.RESTATE_SECTION: [r"излож\w*|излага\w*|читать|замени\w*|редакци"],
+    OpType.REPLACE_APPENDIX: [r"излож\w*|излага\w*|читать|замени\w*|редакци"],
+    OpType.ADD_CLAUSE: [r"дополни\w*|дополня\w*|добави\w*|включи\w*"],
+    OpType.DELETE_CLAUSE: [r"исключи\w*|исключа\w*|утративш\w*\s+силу|утрачива\w*\s+силу|удали\w*"],
 }
 _PERMISSIVE = re.compile(r"\bмо(?:жет|гут)\b|\bвправе\b|\bиме(?:ет|ют)\s+право\b|\bв\s+случа(?:е|ях)\b"
                          r"|\bпри\s+условии\b|\bесли\b|\bподлеж\w*", re.IGNORECASE)
@@ -331,8 +337,8 @@ def _says(pattern: str, text: str) -> bool:
 
 
 def check_operative_wording(op: OpType, page: Page, spans: list[Span]) -> CheckResult:
-    """Termination, partial suspension and restatement of a document change everything after them, so the
-    sentence quoted for one must carry it out, not merely allow it or make it conditional."""
+    """The sentence quoted for an operation must carry it out: its own verb, not a possibility or a condition.
+    Termination, suspension and restatement change everything after them; a clause operation changes the fold."""
     patterns = _OPERATIVE.get(op)
     if not patterns:
         return _ok("operative")
@@ -387,6 +393,8 @@ _START_BEFORE = re.compile(r"(?:\bс|\bсо|вступ\w*\s+в\s+силу(?:\s+�
 _START_CONTEXT = re.compile(r"вступ\w*\s+в\s+силу|распространя\w*|применя\w*\s+с\b|действ\w*\s+с\b")
 _END_BEFORE = re.compile(r"(?:\bдо|\bпо|окончани\w*|истечени\w*|срок\w*\s+действи\w*)\s*[:—-]?\s*$")
 DATE_ROLES = {"doc_date", "effective_from", "effective_to"}
+_OPERATION_VERB = re.compile(r"расторг\w*|прекра[тщ]\w*|приостан\w*|излож\w*|исключ\w*|дополн\w*|отмен\w*")
+_IN_FORCE_CUE = re.compile(r"вступ\w*\s+в\s+силу|распространя\w*")
 
 
 def check_date_role(field: str, value: str | None, quote: str | None) -> CheckResult:
@@ -403,6 +411,10 @@ def check_date_role(field: str, value: str | None, quote: str | None) -> CheckRe
         fits = [w for w in windows if not (_REFERENCE_BEFORE.search(w) or _START_BEFORE.search(w) or _END_BEFORE.search(w))]
         reason = "дата в цитате — не дата подписания этого документа (ссылка на другой договор или срок действия)"
     elif field == "effective_from":
+        folded = " ".join(quote.casefold().split())
+        # «расторгают Договор с 01.09.2026» dates the termination, not the supplement's own entry into force.
+        if _OPERATION_VERB.search(folded) and not _IN_FORCE_CUE.search(folded):
+            return _fail("date_role", "дата в цитате — дата операции (расторжение, изменение), а не вступления в силу")
         fits = [w for w in windows if not (_REFERENCE_BEFORE.search(w) or _END_BEFORE.search(w))
                 and (_START_BEFORE.search(w) or _START_CONTEXT.search(w))]
         reason = "дата в цитате — не начало действия (окончание срока, ссылка или нет слов «вступает в силу», «с»)"

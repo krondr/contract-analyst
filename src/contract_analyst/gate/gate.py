@@ -39,7 +39,7 @@ from contract_analyst.models import (
     Source,
     ValueStatus,
 )
-from contract_analyst.parsing.patterns import find_numbers, parse_money
+from contract_analyst.parsing.patterns import date_spans, find_numbers, parse_money
 from contract_analyst.understand.schemas import OpOut, RateOut
 
 # The evidence fits more than one reading, or the period is not tied to the value: doubtful rather than wrong.
@@ -247,7 +247,16 @@ _NEEDS_TARGET = {OpType.REPLACE_CLAUSE, OpType.DELETE_CLAUSE, OpType.REPLACE_APP
                  OpType.ADD_CLAUSE}
 
 
+def _stated_start(quote: str | None) -> str | None:
+    """The one start date («с 01.03.2026») an operation's own sentence states, when the model gave none."""
+    starts = {d for d, start, _ in date_spans(quote or "")
+              if re.search(r"(?:\bс|\bсо|начиная\s+с)\s*[«\"]?\s*$", (quote or "")[max(0, start - 20):start].casefold())}
+    return next(iter(starts)).isoformat() if len(starts) == 1 else None
+
+
 def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
+    if not op.effective_from and op.op != OpType.INVALIDATE_DOCUMENT and (stated := _stated_start(op.quote)):
+        op = op.model_copy(update={"effective_from": stated})
     eff_from, eff_to = _iso(op.effective_from), _iso(op.effective_to)
     base = {"op": op.op, "target": op.target, "new_text": op.new_text_excerpt,
                 "effective_from": eff_from if isinstance(eff_from, date) else None,

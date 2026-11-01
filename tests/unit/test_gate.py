@@ -383,3 +383,35 @@ def test_agreement_on_mutual_termination_of_obligations_is_operative():
     quote = "Стороны договорились о взаимном прекращении обязательств по продвижению услуг с 01.07.2026 г"
     assert gate_op(OpOut(op="suspend_part", effective_from="2026-07-01", page=1, quote=quote), text_doc([text]),
                    load_settings()).status == "accepted"
+
+
+@pytest.mark.parametrize(("op", "text", "accepted"), [
+    ("replace_clause", "1. Изложить пункт 4.2 Договора в следующей редакции: «4.2. Ставка 500 рублей».", True),
+    ("replace_clause", "1. Пункт 4.2 Договора читать в новой редакции.", True),
+    ("replace_clause", "4. Вознаграждение Дилера определяется по пункту 4.2 Договора.", False),
+    ("add_clause", "1. Дополнить Договор пунктом 4.2.1 следующего содержания.", True),
+    ("delete_clause", "1. Пункт 7.3 Договора исключить.", True),
+    ("delete_clause", "1. Пункт 7.3 Договора признать утратившим силу.", True),
+    ("replace_appendix", "1. Приложение № 3 к Договору изложить в редакции Приложения № 1 к настоящему Соглашению.", True),
+])
+def test_clause_operation_needs_its_own_wording(op, text, accepted):
+    quote = text.split(". ", 1)[1].rstrip(".")
+    target = {"add_clause": "4.2.1", "delete_clause": "7.3", "replace_appendix": "Приложение 3"}.get(op, "4.2")
+    r = gate_op(OpOut(op=op, target=target, page=1, quote=quote), text_doc([text]), load_settings())
+    assert (r.status == "accepted") is accepted, r.reason
+
+
+def test_entry_into_force_is_not_the_date_of_an_operation():
+    text = "1. Стороны по взаимному согласию расторгают Договор с 01.09.2026."
+    r = apply_gate(Candidate(field="effective_from", value="2026-09-01", kind="date", page=1,
+                             quote="Стороны по взаимному согласию расторгают Договор с 01.09.2026"),
+                   text_doc([text]), load_settings())
+    assert r.status == "rejected" and r.reason.startswith("date_role")
+
+
+def test_operation_takes_the_start_date_its_own_sentence_states():
+    text = "2. С 01.03.2026 прекращаются обязательства Дилера по пункту 1.1.1 Договора.\n3. Соглашение вступает в силу с 16.02.2026."
+    r = gate_op(OpOut(op="suspend_part", target="1.1.1", page=1,
+                      quote="С 01.03.2026 прекращаются обязательства Дилера по пункту 1.1.1 Договора"),
+                text_doc([text]), load_settings())
+    assert r.status == "accepted" and str(r.effective_from) == "2026-03-01"
