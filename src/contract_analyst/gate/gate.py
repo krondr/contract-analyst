@@ -187,15 +187,16 @@ _VAT_SAID = {
 _VAT_CONTEXT = 400  # characters above the row: the table header that states VAT for its rows
 
 
-def _vat_stated(vat: str, quote: str, page: Page) -> bool:
-    """The VAT treatment the model gave is said in the quote or in the text just above it on the page."""
-    pattern = _VAT_SAID.get(vat)
-    if pattern is None:
-        return True  # "unknown" claims nothing
+def _vat_said(quote: str, page: Page) -> set[str]:
+    """VAT treatments said in the quote or in the text just above it on the page (a table header)."""
     text, q = page.text.casefold(), quote.casefold().strip()
     at = text.find(q[:40]) if q else -1
     context = q + "\n" + (text[max(0, at - _VAT_CONTEXT):at] if at >= 0 else "")
-    return bool(pattern.search(context))
+    return {vat for vat, pattern in _VAT_SAID.items() if pattern.search(context)}
+
+
+_PENALTY = re.compile(r"штраф|пен[яиь]|неустойк", re.IGNORECASE)
+_PRICE = re.compile(r"вознагражд|ставк|цен[аы]|стоимост|плат[аы]|тариф|оплат", re.IGNORECASE)
 
 
 def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
@@ -220,6 +221,8 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
 
     def checks() -> Iterator[CheckResult]:
         yield check_not_redacted(row.quote, row.amount)
+        if _PENALTY.search(row.label or "") or (_PENALTY.search(row.quote or "") and not _PRICE.search(row.quote or "")):
+            yield CheckResult(ok=False, code="not_a_rate", reason="штраф или неустойка — это условие о штрафах, не ставка")
         if len(places) > 1:
             yield CheckResult(ok=False, code="reanchor_ambiguous", reason=(
                 f"сумма {amount} со словами «{row.label}» есть на странице {row.page} в {len(places)} местах"))
@@ -233,8 +236,9 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
 
     if failed := _first_failure(checks()):
         return RateRow(**base, status=_status(failed), reason=_reason(failed))
-    if not _vat_stated(row.vat, row.quote or "", page):
-        base["vat"] = "unknown"  # the amount stands; a VAT treatment the document does not state does not
+    said = _vat_said(row.quote or "", page)
+    # VAT is what the document says for the row; the model's word counts only where the document agrees.
+    base["vat"] = row.vat if row.vat in said else (next(iter(said)) if len(said) == 1 else "unknown")
     return RateRow(**base, status=ValueStatus.ACCEPTED, reason="quote_reanchored" if places else None)
 
 

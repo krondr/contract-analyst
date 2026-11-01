@@ -366,4 +366,13 @@ def test_vat_is_kept_only_where_the_document_states_it():
     assert vat("Ставка вознаграждения составляет 500 рублей.", "Ставка вознаграждения составляет 500 рублей") == "unknown"
     assert vat("Ставки, руб. без учета НДС\nТариф А 500\nТариф Б 800", "Тариф А 500", label="Тариф А") == "excluded"
     assert vat("Ставка вознаграждения составляет 500 рублей, включая НДС.",
-               "Ставка вознаграждения составляет 500 рублей, включая НДС") == "unknown"
+               "Ставка вознаграждения составляет 500 рублей, включая НДС") == "included"
+    header = "Период действия ставки | Ставка за одно заявление, руб. без НДС\nс 01.07.2026 по 31.12.2026 | 500"
+    assert vat(header, "с 01.07.2026 по 31.12.2026 | 500", label="Ставка за одно заявление", said="unknown") == "excluded"
+
+
+def test_penalty_is_not_a_rate():
+    quote = "За каждый случай неоказания услуг Исполнитель уплачивает Заказчику штраф 5 000 (пять тысяч) рублей"
+    r = gate_rate(RateOut(label="штраф за неоказание услуг", amount="5000", page=1, quote=quote),
+                  text_doc([quote + "."]), load_settings())
+    assert r.status == "rejected" and r.reason.startswith("not_a_rate")
