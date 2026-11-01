@@ -129,6 +129,32 @@ def test_header_reanalysis_updates_the_end_date(ctx, monkeypatch):
     assert record.effective_to.value == date(2026, 12, 31)
 
 
+@pytest.fixture
+def twins(tmp_path):
+    """The same file name in two folders, as in a package sorted by contract."""
+    for folder, number in (("Аренда", "D990000002-01"), ("Услуги", "D990000005-01")):
+        (tmp_path / "pkg" / folder).mkdir(parents=True)
+        make_text_pdf(tmp_path / "pkg" / folder / "ДС1.pdf", [f"Дополнительное соглашение № {number}"])
+    return make_ctx(tmp_path, tmp_path / "pkg")
+
+
+def test_ambiguous_file_name_lists_the_candidates_instead_of_taking_the_first(twins):
+    ingest_all(twins)
+    guard = Guard(10, 60)
+    for tool, args in (("analyze_document", {"doc_id": "ДС1.pdf"}),
+                       ("rerecognize", {"doc_id": "ДС1", "pages": [1], "strategy": "higher_dpi"})):
+        result = dispatch(twins, call(tool, **args), guard)
+        assert result.error_type == "ambiguous"
+        assert {c["file"] for c in result.data["candidates"]} == {"Аренда/ДС1.pdf", "Услуги/ДС1.pdf"}
+        assert {c["doc_id"] for c in result.data["candidates"]} == set(twins.documents)
+
+
+def test_read_document_takes_a_relative_path_when_names_repeat(twins):
+    guard = Guard(10, 60)
+    assert dispatch(twins, call("read_document", file_name="ДС1.pdf"), guard).error_type == "ambiguous"
+    assert dispatch(twins, call("read_document", file_name="Услуги/ДС1.pdf"), guard).data["number"] == "D990000005-01"
+
+
 def test_scan_read_returns_low_quality_with_hint(tmp_path, fixtures_package):
     ctx = make_ctx(tmp_path, fixtures_package, ocr=FakeOcrEngine(conf=0.3))
     result = dispatch(ctx, call("read_document", file_name="ДС2 скан.pdf"), Guard(10, 60))

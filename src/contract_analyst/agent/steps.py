@@ -6,6 +6,7 @@ import json
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from pathlib import Path
 
 from contract_analyst.agent.context import RunContext
 from contract_analyst.analyze.cluster import cluster_contracts, summarize_cluster
@@ -76,17 +77,39 @@ def _register(ctx: RunContext, doc: DocumentText) -> None:
         ctx.changed("documents")
 
 
-def resolve_doc_id(ctx: RunContext, ref: str) -> str | None:
-    """Accept a doc_id or a file name: small models often pass the name they saw in the inventory."""
+def _rel(ctx: RunContext, file: InputFile) -> str:
+    path = Path(file.path)
+    return path.relative_to(ctx.input_dir).as_posix() if path.is_relative_to(ctx.input_dir) else file.name
+
+
+def _matches(ctx: RunContext, ref: str) -> list[str]:
+    """doc_ids a reference names. Small models pass what they saw in the inventory: a doc_id, a file name or stem,
+    a path in the package, or a document number."""
     if ref in ctx.documents:
-        return ref
+        return [ref]
+    found = []
     for d in ctx.documents.values():
         header = ctx.headers.get(d.doc_id)
         record = ctx.records.get(d.doc_id)
-        if ref in (d.file.name, d.file.name.rsplit(".", 1)[0]) or (header and header.number == ref) or (
-                record and record.number.value == ref):
-            return d.doc_id
-    return None
+        if ref in (d.file.name, d.file.name.rsplit(".", 1)[0], _rel(ctx, d.file)) or (
+                header and header.number == ref) or (record and record.number.value == ref):
+            found.append(d.doc_id)
+    return found
+
+
+def resolve_doc_id(ctx: RunContext, ref: str) -> str | None:
+    found = _matches(ctx, ref)
+    return found[0] if len(found) == 1 else None
+
+
+def _ambiguous(ref: str, candidates: list[dict]) -> ToolResult:
+    """The same name in several folders (or one number on several documents): never guess which one was meant."""
+    return ToolResult(status="error", error_type="ambiguous", data=fit({"candidates": candidates}),
+                      hint=f"«{ref}» подходит нескольким документам: укажи один из кандидатов")
+
+
+def _doc_candidates(ctx: RunContext, doc_ids: list[str]) -> list[dict]:
+    return [{"doc_id": i, "file": _rel(ctx, ctx.documents[i].file)} for i in doc_ids]
 
 
 def _read(ctx: RunContext, file: InputFile) -> DocumentText:
@@ -135,10 +158,12 @@ def list_only(ctx: RunContext) -> ToolResult:
 def read_one(ctx: RunContext, file_name: str) -> ToolResult:
     if not ctx.inventory:
         ctx.inventory = _inventory(ctx)
-    match = next((f for f in ctx.inventory if f.name == file_name), None)
-    if match is None:
+    matches = [f for f in ctx.inventory if file_name in (f.name, _rel(ctx, f))]
+    if not matches:
         return ToolResult(status="error", error_type="not_found", hint="Нет такого файла: вызови list_inputs")
-    doc = _read(ctx, match)
+    if len(matches) > 1:
+        return _ambiguous(file_name, [{"file": _rel(ctx, f)} for f in matches])
+    doc = _read(ctx, matches[0])
     _register(ctx, doc)
     line = doc_line(ctx, doc) if doc.status not in ("error", "empty") else {"file": doc.file.name, "issues": doc.issues}
     if doc.status == "low_quality":
@@ -153,7 +178,9 @@ def read_one(ctx: RunContext, file_name: str) -> ToolResult:
 
 
 def rerecognize(ctx: RunContext, doc_id: str, pages: list[int], strategy: str) -> ToolResult:
-    doc_id = resolve_doc_id(ctx, doc_id) or doc_id
+    if len(found := _matches(ctx, doc_id)) > 1:
+        return _ambiguous(doc_id, _doc_candidates(ctx, found))
+    doc_id = found[0] if found else doc_id
     doc = ctx.documents.get(doc_id)
     if doc is None:
         return ToolResult(status="error", error_type="not_found", hint="Нет такого doc_id")
@@ -214,9 +241,12 @@ def _counts(record: DocumentRecord) -> dict:
 
 
 def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None = None) -> ToolResult:
-    done, skipped = [], []
+    done, skipped, ambiguous = [], [], {}
     for ref in doc_ids:
-        doc_id = resolve_doc_id(ctx, ref) or ref
+        if len(found := _matches(ctx, ref)) > 1:
+            ambiguous[ref] = found
+            continue
+        doc_id = found[0] if found else ref
         doc = ctx.documents.get(doc_id)
         if doc is None or (ctx.only_doc_ids is not None and doc_id not in ctx.only_doc_ids):
             skipped.append(doc_id)
@@ -242,8 +272,11 @@ def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None =
         done.append({"doc_id": doc_id, "number": record.number.value, "kind": record.kind.value,
                      "parent": record.parent.value.number if record.parent.value else None, "values": _counts(record),
                      "issues": [i.code for i in record.issues]})
+    if ambiguous and not done:
+        return _ambiguous(", ".join(ambiguous), _doc_candidates(ctx, [i for ids in ambiguous.values() for i in ids]))
     status = "ok" if done else "empty"
-    return ToolResult(status=status, data=fit({"analyzed": done, "skipped": skipped}),
+    return ToolResult(status=status, data=fit({"analyzed": done, "skipped": skipped,
+                                               **({"ambiguous": list(ambiguous)} if ambiguous else {})}),
                       hint=None if done else "Ни один документ не разобран: проверь doc_id через list_inputs")
 
 

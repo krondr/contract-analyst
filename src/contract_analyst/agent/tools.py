@@ -27,7 +27,7 @@ class ListInputsArgs(ThoughtArgs):
 
 
 class ReadDocumentArgs(ThoughtArgs):
-    file_name: str = Field(..., description="Имя файла из описи")
+    file_name: str = Field(..., description="Имя файла из описи; если имя повторяется — путь в папке пакета")
 
 
 class RerecognizeArgs(ThoughtArgs):
