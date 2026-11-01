@@ -66,10 +66,11 @@ def make_scan_pdf(path: Path, pages: list[str], rotate: int = 0, noise: float = 
     return path
 
 
-def make_docx(path: Path, paragraphs: list[str]) -> Path:
+def make_docx(path: Path, paragraphs: list[str], numbered: tuple[int, ...] = ()) -> Path:
+    """Paragraphs whose index is in `numbered` get Word's automatic numbering (style «List Number»)."""
     document = docx.Document()
-    for p in paragraphs:
-        document.add_paragraph(p)
+    for i, p in enumerate(paragraphs):
+        document.add_paragraph(p, style="List Number" if i in numbered else None)
     document.save(path)
     return path
 

@@ -15,6 +15,13 @@ KEYWORDS = {
     "ops": r"изложить|внести изменени|дополнить|исключить|недействительн|прекращ|расторг|вступает в силу|распространяет",
 }
 _TOP_LEVEL = re.compile(r"\d{1,3}")
+# A supplement states its operations in sub-clauses too («1. Внести в Договор следующие изменения: 1.1. ...»).
+# Main contracts keep the narrower KEYWORDS["ops"] routing, so their recorded LLM answers stay valid.
+_SUPPLEMENT_OPS = re.compile(
+    r"изложить|редакци|вн(?:ести|осит\w*|осят\w*)\b.{0,40}изменени|изменить|заменить|дополнить|исключить"
+    r"|утратившим\s+силу|недействительн|отменить|прекращ|прекрат|приостанов|расторг|вступает в силу|распространяет",
+    re.IGNORECASE | re.DOTALL)
+_FEW_CLAUSES = 2
 
 
 def estimate_tokens(clauses: list[Clause]) -> int:
@@ -32,7 +39,33 @@ def _split(clause: Clause, max_chars: int) -> list[Clause]:
     return parts
 
 
-def _chosen(doc: DocumentText, group: str) -> list[Clause]:
+def _quoted(text: str) -> list[tuple[int, int]]:
+    """«…» pairs, where a supplement quotes new wording; an unmatched « opens nothing."""
+    pairs, opened = [], []
+    for i, ch in enumerate(text):
+        if ch == "«":
+            opened.append(i)
+        elif ch == "»" and opened:
+            pairs.append((opened.pop(), i))
+    return pairs
+
+
+def _supplement_ops(doc: DocumentText) -> list[Clause]:
+    if sum(c.clause_id != "preamble" for c in doc.clauses) <= _FEW_CLAUSES:
+        return list(doc.clauses)  # (almost) unsegmented, e.g. Word auto-numbering: the whole short document
+    quoted = _quoted("\n".join(c.text for c in doc.clauses))
+    picked, offset = [], 0
+    for clause in doc.clauses:
+        hits = [offset + m.start() for m in _SUPPLEMENT_OPS.finditer(clause.text)]
+        if any(not any(a < hit < b for a, b in quoted) for hit in hits):
+            picked.append(clause)
+        offset += len(clause.text) + 1
+    return picked
+
+
+def _chosen(doc: DocumentText, group: str, supplement: bool) -> list[Clause]:
+    if group == "ops" and supplement:
+        return _supplement_ops(doc)
     if group == "header":
         numbered = [c for c in doc.clauses if c.clause_id != "preamble"][:2]
         return [c for c in doc.clauses if c.clause_id == "preamble"] + numbered
@@ -43,11 +76,11 @@ def _chosen(doc: DocumentText, group: str) -> list[Clause]:
     return picked
 
 
-def select_clauses(doc: DocumentText, group: str, settings: Settings) -> list[list[Clause]]:
+def select_clauses(doc: DocumentText, group: str, settings: Settings, supplement: bool = False) -> list[list[Clause]]:
     budget = settings.llm_batch_tokens
     batches: list[list[Clause]] = []
     current: list[Clause] = []
-    for clause in _chosen(doc, group):
+    for clause in _chosen(doc, group, supplement):
         for piece in _split(clause, budget * 3):
             if current and estimate_tokens([*current, piece]) > budget:
                 batches.append(current)

@@ -143,9 +143,10 @@ class _Acc:
             self.terms[field] = old.model_copy(update={"value": f"{old.value}; {ext.value}"})
 
 
-def _run_group(acc: _Acc, doc: DocumentText, group: str, client: LLMClient, settings: Settings) -> None:
+def _run_group(acc: _Acc, doc: DocumentText, group: str, client: LLMClient, settings: Settings,
+               supplement: bool = False) -> None:
     schema = GROUP_SCHEMAS[group]
-    for batch in select_clauses(doc, group, settings):
+    for batch in select_clauses(doc, group, settings, supplement=supplement):
         out = _call(client, _messages(doc, group, batch, settings), schema, acc.issues, doc, group)
         if out is None:
             continue
@@ -189,14 +190,27 @@ def _parent(number: Extracted[str], when: Extracted[str]) -> dict:
         reason=when.reason if when.status == ValueStatus.CONFLICT else number.reason).model_dump()
 
 
+def _is_main(acc: _Acc, header: HeaderGuess) -> bool:
+    """The title and the model both say main contract, and no parent reference was found."""
+    return (header.title_kind == "contract" and acc.header is not None and acc.header.kind == DocKind.MAIN
+            and not header.parent_number)
+
+
+def _is_supplement(acc: _Acc, header: HeaderGuess) -> bool:
+    parent = acc.header_values.get("parent_number")
+    return (header.title_kind == "supplement" or bool(header.parent_number)
+            or (acc.header is not None and acc.header.kind == DocKind.SUPPLEMENT)
+            or (parent is not None and parent.status == ValueStatus.ACCEPTED))
+
+
 def understand_document(doc: DocumentText, header: HeaderGuess, client: LLMClient, settings: Settings,
                         groups: list[str] | None = None) -> DocumentRecord:
     wanted = [g for g in settings.field_groups if groups is None or g in groups]
     acc = _Acc()
     for group in wanted:
-        if group == "ops" and acc.header and acc.header.kind == DocKind.MAIN and not header.parent_number:
+        if group == "ops" and _is_main(acc, header):
             continue  # a main contract has nothing to amend; saves LLM calls on long contracts
-        _run_group(acc, doc, group, client, settings)
+        _run_group(acc, doc, group, client, settings, supplement=group == "ops" and _is_supplement(acc, header))
 
     regex = _regex_candidates(header, doc, settings) if doc.pages else {}
     values = {f: _merge(regex.get(f), acc.header_values.get(f)) for f in _HEADER_KINDS}
