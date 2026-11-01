@@ -2,20 +2,33 @@ import cv2
 import pymupdf
 
 from contract_analyst.config import load_settings
+from contract_analyst.ingest import reader
 from contract_analyst.ingest.inventory import list_inputs
 from contract_analyst.ingest.reader import read_document, rerecognize_pages
+from contract_analyst.models import Clause
 from tests.fixtures.builders import (
     FakeOcrEngine,
     build_mixed_pdf,
     make_docx,
+    make_multipage_tiff,
     make_scan_pdf,
     render_text_image,
 )
 
 
-def _read(path, engine=None, **kw):
+def _read(path, engine=None, settings=None, **kw):
     (f,) = [f for f in list_inputs(path.parent) if f.name == path.name]
-    return read_document(f, engine or FakeOcrEngine(), load_settings(), **kw)
+    return read_document(f, engine or FakeOcrEngine(), settings or load_settings(), **kw)
+
+
+class SizeRecordingOcr(FakeOcrEngine):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.heights: list[int] = []
+
+    def recognize(self, image):
+        self.heights.append(image.shape[0])
+        return super().recognize(image)
 
 
 def test_mixed_pdf_routes_pages(tmp_path):
@@ -61,6 +74,36 @@ def test_cache_reuses_result_without_ocr(tmp_path):
     first = _read(tmp_path / "m.pdf", FakeOcrEngine(text="первый 1500"), cache_dir=tmp_path / "cache")
     again = _read(tmp_path / "m.pdf", FakeOcrEngine(text="второй"), cache_dir=tmp_path / "cache")
     assert again.pages[1].text == first.pages[1].text == "первый 1500"
+
+
+def test_cache_key_covers_reader_version_and_the_settings_that_change_the_reading(tmp_path, monkeypatch):
+    build_mixed_pdf(tmp_path / "m.pdf")
+    cache = tmp_path / "cache"
+    first = _read(tmp_path / "m.pdf", FakeOcrEngine(text="первый 1500"), cache_dir=cache)
+    strict = _read(tmp_path / "m.pdf", FakeOcrEngine(text="второй 1500"), load_settings(ocr_word_conf_threshold=0.99),
+                   cache_dir=cache)
+    assert first.status == "ok" and strict.status == "low_quality" and strict.pages[1].text == "второй 1500"
+    monkeypatch.setattr(reader, "READER_VERSION", reader.READER_VERSION + 1)
+    assert _read(tmp_path / "m.pdf", FakeOcrEngine(text="третий 1500"), cache_dir=cache).pages[1].text == "третий 1500"
+
+
+def test_cached_reading_is_segmented_again(tmp_path, monkeypatch):
+    build_mixed_pdf(tmp_path / "m.pdf")
+    _read(tmp_path / "m.pdf", cache_dir=tmp_path / "cache")
+    monkeypatch.setattr(reader, "segment_clauses", lambda pages: [Clause(clause_id="новая", page=1, text="нарезка")])
+    assert [c.clause_id for c in _read(tmp_path / "m.pdf", cache_dir=tmp_path / "cache").clauses] == ["новая"]
+
+
+def test_multipage_tiff_reads_every_frame(tmp_path):
+    texts = ["\n".join(["Страница договора"] * n) for n in (8, 11, 14)]  # frames of different heights
+    make_multipage_tiff(tmp_path / "скан.tiff", texts)
+    ocr = SizeRecordingOcr()
+    doc = _read(tmp_path / "скан.tiff", ocr)
+    assert [(p.number, p.method) for p in doc.pages] == [(1, "ocr"), (2, "ocr"), (3, "ocr")]
+    assert len(set(ocr.heights)) == 3
+    again = SizeRecordingOcr(text="лучше 1500")
+    better = rerecognize_pages(doc, [2], again, "none", 300)
+    assert again.heights == [ocr.heights[1]] and better.pages[1].text == "лучше 1500"
 
 
 def test_rerecognize_replaces_only_requested_pages(tmp_path):

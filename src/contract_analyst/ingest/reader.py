@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import zipfile
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from contract_analyst.ingest.segment import segment_clauses
 from contract_analyst.models import DocFormat, DocumentText, InputFile, Page, PageMethod, PageQuality
 from contract_analyst.ocr import OcrEngine, ocr_page
 from contract_analyst.ocr.render import render_page
+
+READER_VERSION = 2  # bump when read_document returns something else for the same file and settings
 
 
 def _chars(text: str) -> int:
@@ -88,21 +91,34 @@ def _read_docx(file: InputFile, settings: Settings) -> DocumentText:
                    settings)
 
 
+def _frame(path: str, index: int):
+    """One frame of an image file as RGB, read alone so a long multi-page TIFF is not held in memory at once."""
+    ok, frames = cv2.imreadmulti(path, index, 1, flags=cv2.IMREAD_COLOR)
+    return cv2.cvtColor(frames[0], cv2.COLOR_BGR2RGB) if ok and frames else None
+
+
 def _read_image(file: InputFile, engine: OcrEngine, settings: Settings) -> DocumentText:
-    bgr = cv2.imread(file.path)
-    if bgr is None:
-        return _error(file, "corrupted")
-    return _finish(file, [_ocr_to_page(1, cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), engine, settings)], settings)
+    pages: list[Page] = []
+    for i in range(cv2.imcount(file.path)):  # a multi-page TIFF is a multi-page document; 0 if unreadable
+        image = _frame(file.path, i)
+        if image is None:
+            return _error(file, "corrupted")
+        pages.append(_ocr_to_page(i + 1, image, engine, settings))
+    return _finish(file, pages, settings) if pages else _error(file, "corrupted")
 
 
 def _cache_path(cache_dir: Path, file: InputFile, engine: OcrEngine, settings: Settings) -> Path:
-    return cache_dir / f"{file.sha256}-{engine.name}-{settings.ocr_preprocess}-{settings.ocr_dpi}.json"
+    knobs = (READER_VERSION, settings.ocr_preprocess, settings.ocr_dpi, settings.text_layer_min_chars,
+             settings.ocr_word_conf_threshold, settings.low_quality_ratio)
+    return cache_dir / f"{file.sha256}-{engine.name}-{hashlib.sha256(repr(knobs).encode()).hexdigest()[:12]}.json"
 
 
 def read_document(file: InputFile, engine: OcrEngine, settings: Settings, cache_dir: Path | None = None) -> DocumentText:
     cached = _cache_path(cache_dir, file, engine, settings) if cache_dir else None
     if cached and cached.exists():
-        return DocumentText.model_validate_json(cached.read_text(encoding="utf-8")).model_copy(update={"file": file})
+        doc = DocumentText.model_validate_json(cached.read_text(encoding="utf-8"))
+        # Segmentation changes more often than OCR does: cut the cached pages again instead of trusting old clauses.
+        return doc.model_copy(update={"file": file, "clauses": segment_clauses(doc.pages)})
     if file.format == DocFormat.PDF:
         result = _read_pdf(file, engine, settings)
     elif file.format == DocFormat.DOCX:
@@ -125,7 +141,9 @@ def rerecognize_pages(doc: DocumentText, pages: list[int], engine: OcrEngine, mo
     new_pages = list(doc.pages)
     for number in pages:
         if doc.file.format == DocFormat.IMAGE:
-            image = cv2.cvtColor(cv2.imread(doc.file.path), cv2.COLOR_BGR2RGB)
+            image = _frame(doc.file.path, number - 1)
+            if image is None:
+                continue
         else:
             image = render_page(Path(doc.file.path), number, dpi)
         new_pages[number - 1] = _ocr_to_page(number, image, engine, settings, mode)

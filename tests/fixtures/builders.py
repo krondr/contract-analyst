@@ -66,6 +66,12 @@ def make_scan_pdf(path: Path, pages: list[str], rotate: int = 0, noise: float = 
     return path
 
 
+def make_multipage_tiff(path: Path, pages: list[str]) -> Path:
+    """A scanner's multi-page TIFF: one frame per text."""
+    assert cv2.imwritemulti(str(path), [cv2.cvtColor(render_text_image(t, dpi=100), cv2.COLOR_RGB2BGR) for t in pages])
+    return path
+
+
 def make_docx(path: Path, paragraphs: list[str], numbered: tuple[int, ...] = ()) -> Path:
     """Paragraphs whose index is in `numbered` get Word's automatic numbering (style «List Number»)."""
     document = docx.Document()
