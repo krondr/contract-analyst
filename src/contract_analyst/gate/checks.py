@@ -25,6 +25,7 @@ from contract_analyst.parsing.patterns import (
     find_numbers,
     number_readings,
 )
+from contract_analyst.understand.routing import _quoted
 
 ValueKind = Literal["date", "number", "money", "doc_number", "text"]
 Span = tuple[int, int]  # offsets in normalize_text(page.text)
@@ -338,16 +339,25 @@ def _says(pattern: str, text: str) -> bool:
     return any(not _NEGATED.search(text, 0, m.start()) for m in re.finditer(pattern, text, re.IGNORECASE))
 
 
+def _unquoted(text: str) -> str:
+    """The text with every «…» blanked out, offsets kept."""
+    for a, b in _quoted(text):
+        text = text[:a] + " " * (b + 1 - a) + text[b + 1:]
+    return text
+
+
 def check_operative_wording(op: OpType, page: Page, spans: list[Span]) -> CheckResult:
     """The sentence quoted for an operation must carry it out: its own verb, not a possibility or a condition.
-    Termination, suspension and restatement change everything after them; a clause operation changes the fold."""
+    Termination, suspension and restatement change everything after them; a clause operation changes the fold.
+    A condition inside the quoted new wording («…вправе…, если…») belongs to that wording, not to the operation."""
     patterns = _OPERATIVE.get(op)
     if not patterns:
         return _ok("operative")
     source = normalize_text(page.text)
+    unquoted = _unquoted(source)
     for a, b in spans:
-        sentence = source[slice(*sentence_around(source, a, b))]
-        if all(_says(p, sentence) for p in patterns) and not _PERMISSIVE.search(sentence):
+        sentence = slice(*sentence_around(source, a, b))
+        if all(_says(p, source[sentence]) for p in patterns) and not _PERMISSIVE.search(unquoted[sentence]):
             return _ok("operative")
     return _fail("not_operative", f"в цитируемом предложении нет действующей формулировки для «{op.value}»: "
                                   "только возможность или условие")

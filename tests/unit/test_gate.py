@@ -513,3 +513,18 @@ def test_clause_operation_target_must_be_named_by_its_sentence_or_clause(op, tex
     r = gate_op(OpOut(op=op, target=target, page=1, quote=quote), text_doc([text]), load_settings())
     assert (r.status == "accepted") is accepted, r.reason
     assert accepted or r.reason.startswith("target_not_named")
+
+
+_REWRITE_7_2 = "Пункт 7.2 Договора изложить в следующей редакции"
+
+
+@pytest.mark.parametrize(("operation", "wording", "accepted"), [
+    (_REWRITE_7_2, "Арендатор вправе расторгнуть Договор, если Арендодатель нарушит срок передачи", True),
+    (_REWRITE_7_2, "В случае просрочки оплаты Арендатор уплачивает пени", True),
+    (_REWRITE_7_2, "Арендатор вправе отказаться от Договора. Уведомление направляется за 30 дней", True),
+    ("Стороны вправе изложить пункт 7.2 Договора в следующей редакции", "Арендная плата вносится ежемесячно", False)])
+def test_permissive_words_count_only_outside_the_quoted_new_wording(operation, wording, accepted):
+    text = f"1. {operation}: «7.2. {wording}»."
+    r = gate_op(OpOut(op="replace_clause", target="7.2", page=1, quote=operation), text_doc([text]), load_settings())
+    assert (r.status == "accepted") is accepted, r.reason
+    assert accepted or r.reason.startswith("not_operative")
