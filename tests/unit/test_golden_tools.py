@@ -64,6 +64,17 @@ def test_diff_tolerates_paraphrased_terms():
     assert not [d for d in diff_golden(a, b) if "terms" in d.path]
 
 
+def test_diff_flags_terms_that_differ_in_a_date_or_a_key_word():
+    def gs(validity, payment):
+        return _gs(documents=[_gdoc(terms={"validity": GoldenValue(value=validity),
+                                           "payment_terms": GoldenValue(value=payment)})])
+
+    a = gs("действует до 31 декабря 2026 года", "оплата ежемесячно до 10 числа")
+    b = gs("действует до 31 декабря 2025 года", "оплата ежеквартально до 10 числа")
+    assert {d.path for d in diff_golden(a, b)} == {"documents[d1].terms.validity", "documents[d1].terms.payment_terms"}
+    assert not diff_golden(a, gs("действует до 31.12.2026", "ежемесячная оплата до 10 числа"))
+
+
 def test_check_passes_consistent_set():
     assert check_golden(_gs(), {"d1": text_doc([PAGE], doc_id="d1")}) == []
 

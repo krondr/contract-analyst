@@ -12,12 +12,36 @@ from pydantic import BaseModel
 
 from contract_analyst.eval.golden import GoldenRate, GoldenSet
 from contract_analyst.ingest.normalize import normalize_text
+from contract_analyst.kb.lemmatize import lemmatize
 from contract_analyst.kb.store import KnowledgeBase
 from contract_analyst.models import DocumentRecord, Extracted, ValueStatus
-from contract_analyst.parsing.patterns import DOC_NUMBER_RE
+from contract_analyst.parsing.patterns import DOC_NUMBER_RE, find_dates
 
-_WORD = re.compile(r"[0-9a-zа-яё]{3,}")
 SCALAR_FIELDS = {"number": "number", "doc_date": "doc_date", "effective_from": "effective_from"}
+
+_ISO_DATE = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
+_YEAR_WORD = r"(?:\s*(?:г\.|года\b|год\b|г\b))?"
+_ZERO_KOPECKS = re.compile(r"(?<!\d)00?\s*коп\w*\.?")
+_ENUMERATOR = re.compile(r"^\s*\d+(?:\.\d+)*\.\s")  # «2.2. Оплата …»: the clause number is not part of the value
+_NUMBER = re.compile(r"(?<![\d.,])\d{1,3}(?:[   ]\d{3})+(?:[.,]\d+)?(?!\d)|\d+(?:[.,]\d+)*")
+_TOKEN = re.compile(r"[a-zа-я]+(?:-[a-zа-я]+)*")
+_STOP = {"для", "при", "или", "что", "чем", "как", "это", "этот", "тот", "такой", "также", "который", "свой", "весь",
+         "его", "она", "они", "оно"}
+_CANON = {"ежедневный": "ежедневно", "еженедельный": "еженедельно", "ежемесячный": "ежемесячно",
+          "ежеквартальный": "ежеквартально", "ежегодный": "ежегодно", "ранее": "ранний", "руб": "рубль"}
+# Mutually exclusive alternatives: a different member unmatched on each side is a substitution, not a paraphrase,
+# however many other words the two texts share.
+_RIVALS = (
+    {"ежедневно", "еженедельно", "ежемесячно", "ежеквартально", "ежегодно"},
+    {"день", "сутки", "неделя", "месяц", "квартал", "полугодие", "год"},
+    {"рабочий", "календарный", "банковский"},
+    {"менее", "более"},
+    {"поздний", "ранний"},
+    {"рубль", "доллар", "евро"},
+    {"арендатор", "арендодатель", "субарендатор", "заказчик", "исполнитель", "подрядчик", "покупатель", "продавец",
+     "поставщик", "дилер", "агент", "принципал", "лицензиар", "лицензиат", "компания"},
+)
+_MIN_WORD_COVERAGE = 0.6
 
 
 class Scores(BaseModel):
@@ -53,11 +77,67 @@ def same_value(a, b) -> bool:
         return _norm_text(a) == _norm_text(b)
 
 
+def _facts_and_words(text: str | None) -> tuple[set[tuple], set[str]]:
+    """Document numbers, dates and numbers as exact facts; the remaining words as lemmas."""
+    facts: set[tuple] = set()
+    t = normalize_text(str(text or ""))
+    facts.update(("doc", n) for n in DOC_NUMBER_RE.findall(t))
+    t = DOC_NUMBER_RE.sub(" ", t).casefold().replace("ё", "е")
+
+    def iso(m: re.Match) -> str:
+        try:
+            facts.add(("date", date(int(m[1]), int(m[2]), int(m[3]))))
+            return " "
+        except ValueError:
+            return m[0]
+
+    t = _ISO_DATE.sub(iso, t)
+    for d, span in find_dates(t):  # «31» декабря 2026 г. and 31.12.2026 are the same fact
+        facts.add(("date", d))
+        t = re.sub(re.escape(span) + _YEAR_WORD, " ", t, count=1)
+
+    def number(m: re.Match) -> str:
+        raw = re.sub(r"[   ]", "", m[0]).replace(",", ".")
+        try:
+            facts.add(("num", Decimal(raw)))
+        except InvalidOperation:
+            facts.add(("num", raw))  # a clause path like 1.1.1
+        return " "
+
+    t = _NUMBER.sub(number, _ZERO_KOPECKS.sub(" ", _ENUMERATOR.sub(" ", t)))
+    words = set()
+    for token in _TOKEN.findall(t):
+        if len(token) >= 3:
+            lemma = lemmatize(token).replace("ё", "е")
+            words.add(_CANON.get(lemma, lemma))
+    return facts, words - _STOP
+
+
+def _related(a: str, b: str) -> bool:
+    """Same word up to the ending: отказ ~ отказаться, письменный ~ письменно, but not ежемесячно ~ ежеквартально."""
+    n = min(6, len(a), len(b))
+    return a[:n] == b[:n]
+
+
 def similar_text(a: str | None, b: str | None) -> bool:
-    wa, wb = set(_WORD.findall(_norm_text(a or ""))), set(_WORD.findall(_norm_text(b or "")))
-    if not wa or not wb:
-        return _norm_text(a or "") == _norm_text(b or "")
-    return len(wa & wb) / min(len(wa), len(wb)) >= 0.6
+    """Two wordings of one term value: the same numbers, dates and document numbers, compatible words.
+
+    Words may be added, dropped or inflected (a shortened golden value against a longer extracted one), but a member
+    of a group of alternatives (ежемесячно / ежеквартально, рабочих / календарных дней, Арендатор / Арендодатель)
+    replaced by another member makes the texts different.
+    """
+    facts_a, words_a = _facts_and_words(a)
+    facts_b, words_b = _facts_and_words(b)
+    if facts_a != facts_b:
+        return False
+    if not (facts_a or words_a) or not (facts_b or words_b):
+        return not (facts_a or words_a or facts_b or words_b)
+    only_a = {w for w in words_a if not any(_related(w, x) for x in words_b)}
+    only_b = {w for w in words_b if not any(_related(w, x) for x in words_a)}
+    if any(only_a & group and only_b & group for group in _RIVALS):
+        return False
+    short, unmatched = (words_a, only_a) if len(words_a) <= len(words_b) else (words_b, only_b)
+    return not short or 1 - len(unmatched) / len(short) >= _MIN_WORD_COVERAGE
 
 
 def _accepted(ext: Extracted):

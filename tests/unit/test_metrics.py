@@ -1,6 +1,8 @@
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from contract_analyst.assemble.chains import build_chains
 from contract_analyst.assemble.consolidate import consolidate
 from contract_analyst.eval.golden import (
@@ -13,7 +15,7 @@ from contract_analyst.eval.golden import (
     GoldenTrap,
     GoldenValue,
 )
-from contract_analyst.eval.metrics import same_value, score_run
+from contract_analyst.eval.metrics import same_value, score_run, similar_text
 from contract_analyst.eval.traps import check_traps
 from contract_analyst.kb.store import KnowledgeBase
 from contract_analyst.models import OpType
@@ -86,3 +88,40 @@ def test_normalized_comparison():
 def test_trap_kinds_interpreted(tmp_path):
     results = {r.trap_id: r.passed for r in check_traps(make_run(tmp_path), golden())}
     assert results == {"T5": True, "T9": True, "T3": True, "T2": True, "T10": True, "T6": False}
+
+
+@pytest.mark.parametrize("gold, got", [
+    ("Срок действия договора до 31 декабря 2026 года", "Срок действия договора до 31 декабря 2025 года"),
+    ("арендная плата 120 000 рублей в месяц", "арендная плата 100 000 рублей в месяц"),
+    ("до 31.12.2026", "до 31.12.2025; до 31.12.2026"),
+    ("оплата ежемесячно до 10 числа", "оплата ежеквартально до 10 числа"),
+    ("Арендная плата вносится ежемесячно, не позднее 10 числа текущего месяца, на расчетный счет Арендодателя",
+     "Арендная плата вносится ежеквартально, не позднее 10 числа текущего месяца, на расчетный счет Арендодателя"),
+    ("в течение 10 рабочих дней после подписания акта", "в течение 10 календарных дней после подписания акта"),
+    ("уведомление не менее чем за 2 месяца", "уведомление не менее чем за 2 недели"),
+    ("штраф 2 000 руб. уплачивает Дилер", "штраф 2 000 руб. уплачивает Компания"),
+    ("по Дополнительному соглашению № D990000002-01", "по Дополнительному соглашению № D990000003-01"),
+], ids=["year", "amount", "two_versions", "monthly_quarterly", "long_substitution", "day_kind", "time_unit",
+        "party", "doc_number"])
+def test_similar_text_tells_different_terms_apart(gold, got):
+    assert not similar_text(gold, got)
+
+
+@pytest.mark.parametrize("gold, got", [
+    ("до 31.12.2026 включительно", "Договор действует до 31 декабря 2026 года включительно"),
+    ("120 000 руб. в месяц без НДС", "120 000 (сто двадцать тысяч) рублей 00 копеек в месяц без НДС"),
+    ("ежемесячно, не позднее 10 числа текущего месяца",
+     "Арендная плата вносится ежемесячно не позднее 10 (десятого) числа текущего месяца"),
+    ("оплата ежемесячно до 10 числа", "ежемесячная оплата до 10-го числа"),
+    ("пени 0,1% за каждый день просрочки", "пени в размере 0.1 % от суммы задолженности за каждый день просрочки"),
+    ("до 31.12.2026 с пролонгацией", "действует до 31.12.2026 с автоматической пролонгацией"),
+    ("с 2027-01-01 по 31.12.2027", "с 01.01.2027 по «31» декабря 2027 г."),
+    ("штраф 5000 руб.", "штраф 5 000 руб."),
+    ("ежемесячно в течение 10 рабочих дней после подписания акта",
+     "2.2. Оплата производится ежемесячно в течение 10 (десяти) рабочих дней после подписания Сторонами акта."),
+    ("односторонний отказ любой из Сторон с письменным уведомлением не менее чем за 2 месяца",
+     "Каждая из Сторон вправе отказаться от Договора, письменно уведомив другую Сторону не менее чем за 2 (два) месяца"),
+], ids=["date_forms", "kopecks_and_words", "longer", "word_forms", "percent", "extra_words", "iso_date", "nbsp",
+        "clause_number", "reworded"])
+def test_similar_text_tolerates_paraphrase(gold, got):
+    assert similar_text(gold, got)

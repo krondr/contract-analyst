@@ -69,32 +69,20 @@ def dump_texts(docs: list[DocumentText], out_dir: Path, png_dpi: int = 150) -> l
 import html as _html
 import json as _json
 import random as _random
-import re as _re
 
 from pydantic import BaseModel as _BaseModel
 
 from contract_analyst.eval.golden import GoldenRate
+from contract_analyst.eval.metrics import similar_text as _similar
 from contract_analyst.eval.text_metrics import cer
 
 _SCALARS = ("number", "doc_date", "city", "parent_number", "parent_date", "effective_from", "counterparty_type")
-_WORD = _re.compile(r"[0-9a-zа-яё]{3,}")
 
 
 class GoldenDiff(_BaseModel):
     path: str
     a: str | None
     b: str | None
-
-
-def _words(text: str | None) -> set[str]:
-    return set(_WORD.findall((text or "").casefold().replace("ё", "е")))
-
-
-def _similar(a: str | None, b: str | None) -> bool:
-    wa, wb = _words(a), _words(b)
-    if not wa or not wb:
-        return (a or "").strip() == (b or "").strip()
-    return len(wa & wb) / min(len(wa), len(wb)) >= 0.6
 
 
 def _rate_key(rates: list[GoldenRate]) -> set[tuple]:
