@@ -241,6 +241,12 @@ def _counts(record: DocumentRecord) -> dict:
 
 
 def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None = None) -> ToolResult:
+    known = list(ctx.settings.field_groups)
+    if unknown := [g for g in groups or [] if g not in known]:
+        # An unknown group would silently analyze nothing and still look like a finished analysis.
+        return ToolResult(status="error", error_type="bad_args",
+                          hint=f"Неизвестные группы полей: {', '.join(unknown)}. Допустимые: {', '.join(known)}; "
+                               "без groups документ разбирается целиком.")
     done, skipped, ambiguous = [], [], {}
     for ref in doc_ids:
         if len(found := _matches(ctx, ref)) > 1:
@@ -262,6 +268,9 @@ def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None =
                 ctx.trace.event("error", "tools", doc_id=doc_id, message=f"{issue.code}: {issue.message}")
         if groups and doc_id in ctx.records:
             record = _merge_records(ctx.records[doc_id], record, groups)
+            ctx.analyzed_groups.setdefault(doc_id, set()).update(groups)
+        else:
+            ctx.analyzed_groups[doc_id] = set(groups or known)
         if ctx.records.get(doc_id) != record:
             ctx.records[doc_id] = record
             ctx.changed("records")

@@ -44,6 +44,7 @@ class RunContext:
     documents: dict[str, DocumentText] = field(default_factory=dict)
     headers: dict[str, HeaderGuess] = field(default_factory=dict)
     records: dict[str, DocumentRecord] = field(default_factory=dict)
+    analyzed_groups: dict[str, set[str]] = field(default_factory=dict)  # field groups each record went through
     chains: list[ContractChain] = field(default_factory=list)
     consolidated: dict[str, ConsolidatedContract] = field(default_factory=dict)
     clusters: list[Cluster] = field(default_factory=list)

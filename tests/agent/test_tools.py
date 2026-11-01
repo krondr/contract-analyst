@@ -212,3 +212,35 @@ def test_missing_thought_falls_back_to_model_reasoning(ctx):
     thoughts = [e for e in read_trace(ctx.trace.path) if e["event"] == "thought"]
     assert thoughts[0]["thought"] == "Сначала смотрю опись файлов." and thoughts[0]["thought_source"] == "reasoning"
     assert thoughts[1]["thought"].endswith("Собираю цепочки.") and len(thoughts[1]["thought"]) <= 601
+
+
+def test_unknown_field_groups_are_an_error_naming_the_valid_ones(ctx):
+    ingest_all(ctx)
+    result = dispatch(ctx, ToolCall(id="1", name="analyze_document",
+                                    args={"thought": "разбираю", "doc_id": "ДС1.pdf",
+                                          "groups": ["contract_number", "references", "date"]}), Guard(10, 60))
+    assert result.status == "error" and "header" in result.hint and "contract_number" in result.hint
+    assert ctx.records == {}
+
+
+def test_safety_net_completes_the_groups_the_agent_skipped(tmp_path, fixtures_package, monkeypatch):
+    import contract_analyst.agent.steps as steps_module
+    from contract_analyst.agent.graph_hybrid import complete_with_code
+    from contract_analyst.llm.scripted import ScriptedClient
+    from tests.agent.conftest import make_ctx
+    from tests.fixtures.builders import make_record
+
+    ctx = make_ctx(tmp_path, fixtures_package, client=ScriptedClient(['{"summary": "Договоры."}'] * 20))
+
+    asked = []
+
+    def understand(doc, header, client, settings, groups=None):
+        asked.append((doc.file.name, tuple(groups or settings.field_groups)))
+        return make_record(doc.doc_id, header.number or doc.doc_id)
+
+    monkeypatch.setattr(steps_module, "understand_document", understand)
+    ingest_all(ctx)
+    steps_module.analyze_docs(ctx, ["ДС1.pdf"], ["header"])
+    complete_with_code(ctx)
+    rest = tuple(g for g in ctx.settings.field_groups if g != "header")
+    assert ("ДС1.pdf", rest) in asked and "analyze_docs" in ctx.safety_net

@@ -205,9 +205,17 @@ def complete_with_code(ctx: RunContext) -> None:
     if not ctx.documents and not ctx.inventory:
         steps.ingest_all(ctx)
         ctx.safety_net.append("ingest_all")
-    scope = [d for d in ctx.documents if (ctx.only_doc_ids is None or d in ctx.only_doc_ids) and d not in ctx.records]
-    if scope:
-        steps.analyze_docs(ctx, scope)
+    in_scope = [d for d in ctx.documents if ctx.only_doc_ids is None or d in ctx.only_doc_ids]
+    known = list(ctx.settings.field_groups)
+    unread = [d for d in in_scope if d not in ctx.records]
+    partial = {d: [g for g in known if g not in ctx.analyzed_groups[d]]
+               for d in in_scope if d in ctx.records and d in ctx.analyzed_groups}
+    if unread:
+        steps.analyze_docs(ctx, unread)
+    for doc_id, rest in partial.items():
+        if rest:
+            steps.analyze_docs(ctx, [doc_id], rest)
+    if unread or any(partial.values()):
         ctx.safety_net.append("analyze_docs")
     # Each part is redone when its inputs changed after it was built, so a rebuild cascades:
     # new records -> chains -> consolidation -> clusters.
