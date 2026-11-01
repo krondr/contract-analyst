@@ -87,7 +87,7 @@
 {% endfor %}
 {% for r in (cc.planned_rates if cc else []) %}
 {% set ns.any = true %}
-- **Ставка «{{ r.label }}»**: с {{ r.valid_from }} будет {{ money(r.amount) }} руб. {{ VAT_RU[r.vat] }} {{ ref(r.source) }}
+- **Ставка «{{ r.label }}»**: с {{ r.valid_from }} будет {{ amount(r) }} {{ VAT_RU[r.vat] }} {{ ref(r.source) }}
 {% endfor %}
 {% if not ns.any %}
 Изменений условий по цепочке не найдено.
@@ -101,7 +101,7 @@
 | {{ TERM_RU.get(name, name) }} | {{ cell(st.current.value) }} | {{ ref(st.current.source) }} |
 {% endfor %}
 {% for r in (cc.rates if cc else []) %}
-| Ставка «{{ cell(r.label) }}» | {{ money(r.amount) }} руб. {{ VAT_RU[r.vat] }}{% if r.valid_from %} с {{ r.valid_from }}{% endif %}{% if r.valid_to %} по {{ r.valid_to }}{% endif %} | {{ ref(r.source) }} |
+| Ставка «{{ cell(r.label) }}» | {{ amount(r) }} {{ VAT_RU[r.vat] }}{% if r.valid_from %} с {{ r.valid_from }}{% endif %}{% if r.valid_to %} по {{ r.valid_to }}{% endif %} | {{ ref(r.source) }} |
 {% endfor %}
 
 {% set issues = chain.issues + (cc.issues if cc else []) %}

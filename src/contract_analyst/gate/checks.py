@@ -15,6 +15,7 @@ from rapidfuzz import fuzz
 from contract_analyst.ingest.normalize import is_redacted, normalize_text
 from contract_analyst.models import OpType, Page, PageMethod
 from contract_analyst.parsing.patterns import (
+    _OCR_NUMBER_RE,
     DOC_NUMBER_RE,
     date_spans,
     doc_number_spans,
@@ -395,6 +396,23 @@ _END_BEFORE = re.compile(r"(?:\bдо|\bпо|окончани\w*|истечени
 DATE_ROLES = {"doc_date", "effective_from", "effective_to"}
 _OPERATION_VERB = re.compile(r"расторг\w*|прекра[тщ]\w*|приостан\w*|излож\w*|исключ\w*|дополн\w*|отмен\w*")
 _IN_FORCE_CUE = re.compile(r"вступ\w*\s+в\s+силу|распространя\w*")
+
+
+# A supplement belongs to the contract it is «к», «в», «о расторжении» of; a definition that only names another
+# contract («ДКП – Договор …, заключенный … № …») is a mention, not a parent.
+_PARENT_ANCHOR = re.compile(r"\b(?:к|в|во|о\s+расторжении|о\s+внесении\s+изменений\s+в)\s+(?:настоящ\w+\s+)?"
+                            r"(?:договор\w*|соглашени\w*|контракт\w*)", re.IGNORECASE)
+
+
+def check_parent_role(field: str, value: str | None, quote: str | None) -> CheckResult:
+    if field != "parent_number" or not value or not quote:
+        return _ok("parent_role_unchecked")
+    starts = [m.start() for m in _OCR_NUMBER_RE.finditer(quote) if f"D{m.group(1)}" == value]
+    if not starts:
+        return _ok("parent_role_unchecked")  # value_in_quote decides whether the number is there at all
+    if any(_PARENT_ANCHOR.search(quote[max(0, start - 90):start]) for start in starts):
+        return _ok("parent_role")
+    return _fail("parent_role", "номер в цитате — упоминание другого договора, а не договор, к которому относится документ")
 
 
 def check_date_role(field: str, value: str | None, quote: str | None) -> CheckResult:

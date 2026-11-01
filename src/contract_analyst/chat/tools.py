@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from contract_analyst.kb.store import KnowledgeBase
 from contract_analyst.labels import status_ru
 from contract_analyst.models import ConsolidatedContract, DocumentRecord, OpType, Source, ValueStatus
-from contract_analyst.report.render import money
+from contract_analyst.report.render import amount
 
 
 def _ref(source: Source | None) -> str:
@@ -70,9 +70,9 @@ def contract_terms(kb: KnowledgeBase, a: TermsArgs) -> dict:
             "status": f"{status_ru(c.status, c.status_since)} {_status_ref(kb, c, records)}".strip(),
             "terms": {k: f"{v.current.value} {_ref(v.current.source)}" for k, v in c.terms.items()
                       if v.current.status == ValueStatus.ACCEPTED},
-            "rates": [f"{r.label}: {money(r.amount)} руб. ({r.vat}) с {r.valid_from or '—'} по {r.valid_to or '—'} "
+            "rates": [f"{r.label}: {amount(r)} ({r.vat}) с {r.valid_from or '—'} по {r.valid_to or '—'} "
                       f"{_ref(r.source)}" for r in c.rates],
-            "planned_rates": [f"{r.label}: {money(r.amount)} руб. с {r.valid_from} {_ref(r.source)}" for r in c.planned_rates],
+            "planned_rates": [f"{r.label}: {amount(r)} с {r.valid_from} {_ref(r.source)}" for r in c.planned_rates],
             "documents": [f"{e.number or e.doc_id} с {e.when or '—'}: {e.summary}{' (отменён)' if e.invalidated else ''} "
                           f"{_doc_ref(records.get(e.doc_id))}".strip() for e in c.timeline]}
 

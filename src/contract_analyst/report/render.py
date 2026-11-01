@@ -71,6 +71,11 @@ def money(amount: Decimal) -> str:
     return f"{grouped},{frac}" if frac else grouped
 
 
+def amount(rate) -> str:
+    """A rate's amount with its unit: «120 000 руб.» or «60 %»."""
+    return f"{money(rate.amount)} %" if rate.unit == "%" else f"{money(rate.amount)} руб."
+
+
 def value(ext: Extracted | None) -> str:
     if ext is None or ext.status != ValueStatus.ACCEPTED or ext.value is None:
         return "—"
@@ -95,7 +100,7 @@ def _refusals(ctx: ReportContext) -> list[dict]:
                              "status": ext.status.value, "reason": ext.reason or "", "ref": ref(ext.source)})
         for rate in r.rates:
             if rate.status != ValueStatus.ACCEPTED:
-                rows.append({"file": r.file_name, "field": f"ставка «{rate.label}»", "value": money(rate.amount),
+                rows.append({"file": r.file_name, "field": f"ставка «{rate.label}»", "value": amount(rate),
                              "status": rate.status.value, "reason": rate.reason or "", "ref": ref(rate.source)})
         for issue in r.issues:
             if issue.code in ("llm_invalid_json", "llm_timeout", "llm_truncated"):
@@ -117,7 +122,7 @@ def _rate_history(chain: ContractChain, records: dict[str, DocumentRecord]) -> d
         for rate in record.rates:
             if rate.status == ValueStatus.ACCEPTED:
                 since = f" с {rate.valid_from}" if rate.valid_from else ""
-                history.setdefault(rate.label, []).append(f"{money(rate.amount)}{since} {ref(rate.source)}")
+                history.setdefault(rate.label, []).append(f"{amount(rate)}{since} {ref(rate.source)}")
     return {label: steps for label, steps in history.items() if len(steps) > 1}
 
 
@@ -132,7 +137,7 @@ def render_report(ctx: ReportContext) -> str:
     rate_history = {c.contract_number: _rate_history(c, ctx.records) for c in ctx.chains}
     template = _ENV.get_template("report.md.j2")
     return template.render(
-        ctx=ctx, docs_by_id=docs_by_id, refusals=_refusals(ctx), rate_history=rate_history, ref=ref, money=money, value=value, cell=cell,
+        ctx=ctx, docs_by_id=docs_by_id, refusals=_refusals(ctx), rate_history=rate_history, ref=ref, money=money, amount=amount, value=value, cell=cell,
         STATUS_RU=STATUS_RU, VAT_RU=VAT_RU, KIND_RU=KIND_RU, TERM_RU=TERM_RU,
         chains=sorted(ctx.chains, key=lambda c: c.contract_number),
         documents=sorted(ctx.documents, key=lambda d: d.file.name)).rstrip() + "\n"

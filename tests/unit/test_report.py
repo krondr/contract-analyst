@@ -160,3 +160,15 @@ def test_text_outside_llm_blocks_untouched():
 
 def test_snapshot():
     assert render_report(small_context()) == (SNAP / "report_small.md").read_text(encoding="utf-8")
+
+
+def test_rate_amount_is_printed_with_its_unit():
+    from decimal import Decimal
+
+    from contract_analyst.models import RateRow, ValueStatus
+    from contract_analyst.report.render import amount
+
+    def row(value, unit):
+        return RateRow(label="Ставка", amount=Decimal(value), unit=unit, status=ValueStatus.ACCEPTED)
+
+    assert amount(row("120000", "RUB")) == "120 000 руб." and amount(row("60", "%")) == "60 %"

@@ -22,6 +22,7 @@ from contract_analyst.gate.checks import (
     check_ocr_confidence,
     check_op_dates_near,
     check_operative_wording,
+    check_parent_role,
     check_period_near,
     check_value_in_quote,
     check_value_on_page,
@@ -122,6 +123,7 @@ def apply_gate(c: Candidate, doc: DocumentText, settings: Settings) -> Extracted
         yield found
         yield check_value_in_quote(c.value, c.quote, c.kind)
         yield check_date_role(c.field, c.value, c.quote)
+        yield check_parent_role(c.field, c.value, c.quote)
         yield check_format(c.value, c.kind)
         yield check_ocr_confidence(c.quote, page, threshold)
         yield check_value_on_page(c.value, c.kind, page, spans, threshold)
@@ -207,7 +209,10 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
         if len(places) == 1:
             row = row.model_copy(update={"quote": places[0]})
     valid_from, valid_to = _iso(row.valid_from), _iso(row.valid_to)
+    percent = "%" in row.amount or bool(amount is not None and re.search(
+        rf"(?<![\d,.]){re.escape(row.amount.strip().rstrip('%').strip())}\s*(?:%|процент)", row.quote or ""))
     base = {"label": row.label, "amount": amount if amount is not None else 0, "vat": row.vat,
+            "unit": "%" if percent else "RUB",
                 "valid_from": valid_from if isinstance(valid_from, date) else None,
                 "valid_to": valid_to if isinstance(valid_to, date) else None, "source": _source(doc, row.page, row.quote)}
     if amount is None:

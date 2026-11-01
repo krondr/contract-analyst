@@ -415,3 +415,30 @@ def test_operation_takes_the_start_date_its_own_sentence_states():
                       quote="С 01.03.2026 прекращаются обязательства Дилера по пункту 1.1.1 Договора"),
                 text_doc([text]), load_settings())
     assert r.status == "accepted" and str(r.effective_from) == "2026-03-01"
+
+
+def test_parent_is_the_contract_a_document_belongs_to_not_one_it_mentions():
+    s = load_settings()
+
+    def parent(text, quote):
+        return apply_gate(Candidate(field="parent_number", value="D990000001-01", kind="doc_number", page=1, quote=quote),
+                          text_doc([text]), s)
+
+    mention = ("1. Термины. ДКП – Договор коммерческого представительства, заключенный между Компанией и Партнером "
+               "№ D990000001-01 от 15.12.2015.")
+    r = parent(mention, "заключенный между Компанией и Партнером № D990000001-01")
+    assert r.status == "rejected" and r.reason.startswith("parent_role")
+    own = "Дополнительное соглашение № D990000002-01 к Договору № D990000001-01 от 15.12.2015"
+    assert parent(own, "к Договору № D990000001-01 от 15.12.2015").status == "accepted"
+    change = "Стороны вносят следующие изменения в Договор № D990000001-01 от 15.12.2015:"
+    assert parent(change, "изменения в Договор № D990000001-01").status == "accepted"
+
+
+def test_percent_rate_keeps_its_unit():
+    quote = "вознаграждение составляет 60% от оплаченных Клиентом начислений"
+    r = gate_rate(RateOut(label="Вознаграждение", amount="60%", page=1, quote=quote), text_doc([quote + "."]),
+                  load_settings())
+    assert r.status == "accepted" and r.unit == "%"
+    rub = gate_rate(RateOut(label="Ставка", amount="500", page=1, quote="Ставка 500 рублей"),
+                    text_doc(["Ставка 500 рублей."]), load_settings())
+    assert rub.unit == "RUB"
