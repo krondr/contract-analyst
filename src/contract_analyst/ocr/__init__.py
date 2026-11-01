@@ -41,15 +41,19 @@ def _turned(engine: OcrEngine, image: np.ndarray, turn: int) -> OcrResult:
 def ocr_page(image: np.ndarray, engine: OcrEngine, mode: str) -> OcrResult:
     """OCR one page the right way up. Evidence, in order: Tesseract OSD when it is installed and sure; then the text
     boxes of the engine (if most are taller than wide the text still stands on its side, so 90 and 270 degrees more
-    are tried and the more confident reading is kept); engines that report no boxes fall back to confidence."""
+    are tried); engines that report no boxes fall back to confidence. A reading with no text at all is no evidence:
+    on a faint sideways scan the detector may find nothing, so the other three turns are tried. Among the tries the
+    most confident one with flat lines wins: RapidOCR also reads tall boxes, through rotated crops, and confidently."""
     prepared = preprocess(image, mode)
     turn = orientation.osd_rotation(prepared)
     result = _turned(engine, prepared, turn or 0)
     if result.tall_box_share is not None:
-        if result.tall_box_share <= TALL_BOX_SHARE:
+        if result.text and result.tall_box_share <= TALL_BOX_SHARE:
             return result
-        candidates = [_turned(engine, prepared, (turn or 0) + extra) for extra in (90, 270)]
-        return max(candidates, key=lambda r: r.mean_conf)
+        extras = (90, 270) if result.text else (90, 180, 270)
+        candidates = [r for r in (_turned(engine, prepared, (turn or 0) + extra) for extra in extras) if r.text]
+        flat = [r for r in candidates if r.tall_box_share is not None and r.tall_box_share <= TALL_BOX_SHARE]
+        return max(flat or candidates, key=lambda r: r.mean_conf) if candidates else result
     if turn is not None or result.mean_conf >= UPRIGHT_CONFIDENCE:
         return result
     best = result

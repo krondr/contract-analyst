@@ -138,6 +138,36 @@ def test_upright_page_with_wide_boxes_is_read_once(monkeypatch):
     assert (ocr_page(_portrait_page(), engine, "none").rotation, engine.calls) == (0, 1)
 
 
+class _FaintSidewaysEngine:
+    """RapidOCR on Linux for a faint sideways scan (CI): no text box at all one way up; the other way up tall boxes
+    that it still reads through rotated crops, more confidently than the upright page; upright, flat confident lines;
+    upside down, flat lines it cannot read."""
+
+    name = "faint"
+
+    def recognize(self, image: np.ndarray) -> OcrResult:
+        def read(conf: float, tall: float) -> OcrResult:
+            return OcrResult(text="текст", words=[OcrWord(text="текст", conf=conf)], mean_conf=conf, tall_box_share=tall)
+
+        nothing = OcrResult(text="", words=[], mean_conf=0.0, tall_box_share=0.0)
+        if image.shape[0] < image.shape[1]:  # on its side
+            return nothing if image[-1, 0] == 0 else read(0.987, 1.0)
+        return read(0.983, 0.0) if image[0, 0] == 0 else nothing
+
+
+def test_page_where_no_text_is_found_is_not_taken_as_upright(monkeypatch):
+    monkeypatch.setattr(orientation, "osd_rotation", lambda image: None)
+    result = ocr_page(np.ascontiguousarray(np.rot90(_portrait_page())), _FaintSidewaysEngine(), "none")
+    assert (result.rotation, result.mean_conf) == (270, 0.983)
+
+
+def test_blank_page_keeps_its_turn(monkeypatch):
+    monkeypatch.setattr(orientation, "osd_rotation", lambda image: None)
+    blank = SimpleNamespace(name="blank", recognize=lambda image: OcrResult(text="", words=[], mean_conf=0.0,
+                                                                            tall_box_share=0.0))
+    assert ocr_page(_portrait_page(), blank, "none").rotation == 0
+
+
 def test_engine_without_boxes_falls_back_to_confidence(monkeypatch):
     monkeypatch.setattr(orientation, "osd_rotation", lambda image: None)
     result = ocr_page(np.rot90(_portrait_page()), _MarkerEngine(boxes=False), "none")
