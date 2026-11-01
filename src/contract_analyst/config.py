@@ -13,6 +13,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = REPO_ROOT / "config" / "default.yaml"
 
 
+def disable_remote_tracing() -> None:
+    """Documents never leave the machine. LangChain and LangGraph send every run to LangSmith by themselves when the
+    environment enables tracing and holds an API key; force it off for this process. Every entry point imports
+    this module before LangChain, and LangSmith reads (and caches) these variables only when the first run starts."""
+    for flag in ("LANGSMITH_TRACING_V2", "LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING", "LANGCHAIN_TRACING"):
+        os.environ[flag] = "false"
+    for key in ("LANGSMITH_API_KEY", "LANGCHAIN_API_KEY"):
+        os.environ.pop(key, None)
+
+
+disable_remote_tracing()
+
+
 class Settings(BaseModel):
     llm_model: str = "ollama:qwen3:8b"
     ollama_url: str = "http://localhost:11434"

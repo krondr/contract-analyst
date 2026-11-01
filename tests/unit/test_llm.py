@@ -60,6 +60,23 @@ def test_replay_miss_raises(tmp_path):
         CachingClient(ScriptedClient([]), tmp_path / "c.sqlite", "replay").chat(M)
 
 
+@pytest.mark.parametrize("url", ["http://localhost:11434", "http://127.0.0.1:11434", "http://[::1]:11434",
+                                 "127.0.0.2:11434"])
+def test_loopback_llm_hosts_need_no_permission(url, monkeypatch):
+    monkeypatch.delenv("CA_ALLOW_REMOTE_LLM", raising=False)
+    OllamaClient("qwen3:8b", base_url=url)
+
+
+@pytest.mark.parametrize("url", ["http://gpu-box:11434", "http://10.0.0.5:11434", "http://0.0.0.0:11434",
+                                 "https://llm.example.com"])
+def test_remote_llm_host_needs_explicit_permission(url, monkeypatch):
+    monkeypatch.delenv("CA_ALLOW_REMOTE_LLM", raising=False)
+    with pytest.raises(LLMUnavailable, match="CA_ALLOW_REMOTE_LLM=1"):
+        OllamaClient("qwen3:8b", base_url=url)
+    monkeypatch.setenv("CA_ALLOW_REMOTE_LLM", "1")
+    OllamaClient("qwen3:8b", base_url=url)
+
+
 def test_ollama_unavailable_gives_hint():
     with pytest.raises(LLMUnavailable, match="ollama serve"):
         OllamaClient("qwen3:8b", base_url="http://127.0.0.1:9", num_ctx=2048).check_available()

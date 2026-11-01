@@ -3,7 +3,10 @@ without thinking are greedy; Qwen3 thinking turns use the sampling Qwen3 is made
 
 from __future__ import annotations
 
+import ipaddress
+import os
 import time
+from urllib.parse import urlsplit
 
 import httpx
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
@@ -18,6 +21,17 @@ THINKING_SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0.
 GREEDY = {"temperature": 0.0}
 # The connection or the server failed (not our code): callers record it and the run goes on.
 TRANSPORT_ERRORS = (TimeoutError, ConnectionError, httpx.TransportError, ResponseError)
+
+
+def is_loopback(url: str) -> bool:
+    """By the address as written: no DNS lookup, which could itself leave the machine or be spoofed."""
+    host = urlsplit(url if "://" in url else f"http://{url}").hostname or ""
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _to_langchain(messages: list[Message]) -> list:
@@ -46,6 +60,9 @@ class OllamaClient:
     def __init__(self, model: str, base_url: str = "http://localhost:11434", num_ctx: int = 16384,
                  timeout: float = 600.0, max_tokens: int = 4096, think_max_tokens: int = 4096,
                  keep_alive: str = "30m", deadline: float = 900.0):
+        if not is_loopback(base_url) and os.environ.get("CA_ALLOW_REMOTE_LLM") != "1":
+            raise LLMUnavailable(f"Модель по адресу {base_url} — не на этой машине: тексты документов ушли бы на "
+                                 "этот сервер. Если сервер ваш и это допустимо, задайте CA_ALLOW_REMOTE_LLM=1.")
         self.model_name, self.base_url, self.num_ctx, self.timeout = model, base_url, num_ctx, timeout
         self.max_tokens, self.think_max_tokens = max_tokens, think_max_tokens
         self.keep_alive, self.deadline = keep_alive, deadline
