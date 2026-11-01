@@ -17,6 +17,7 @@ from contract_analyst.ingest.reader import _error, read_document, rerecognize_pa
 from contract_analyst.kb.store import KnowledgeBase
 from contract_analyst.llm.ollama_client import TRANSPORT_ERRORS
 from contract_analyst.models import (
+    LLM_FAILURES,
     Decision,
     DocumentRecord,
     DocumentText,
@@ -264,7 +265,7 @@ def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None =
             skipped.append(doc_id)
             continue
         for issue in record.issues:
-            if issue.code in ("llm_invalid_json", "llm_timeout", "llm_truncated"):
+            if issue.code in LLM_FAILURES:
                 ctx.trace.event("error", "tools", doc_id=doc_id, message=f"{issue.code}: {issue.message}")
         if groups and doc_id in ctx.records:
             record = _merge_records(ctx.records[doc_id], record, groups)

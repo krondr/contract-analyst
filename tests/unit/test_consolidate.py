@@ -5,7 +5,7 @@ import pytest
 
 from contract_analyst.assemble.chains import build_chains
 from contract_analyst.assemble.consolidate import consolidate, covers
-from contract_analyst.models import Issue, OpType, ValueStatus
+from contract_analyst.models import Extracted, Issue, OpType, RateRow, Source, ValueStatus
 from tests.fixtures.builders import make_record as rec
 
 MAIN = "D990000001-01"
@@ -199,3 +199,73 @@ def test_suspension_of_a_named_clause_replaces_the_term_taken_from_it():
                  ops=[(OpType.SUSPEND_PART, "1.1.1", date(2026, 3, 1))])])
     assert c.terms["plan_indicators"].current.value == "не применяется с 01.03.2026"
     assert c.terms["subject"].current.value == "продвижение услуг; приостановлено привлечение абонентов"
+
+
+@pytest.mark.parametrize("code", ["llm_timeout", "llm_invalid_json", "llm_truncated"])
+def test_ops_group_without_a_usable_answer_makes_the_change_a_conflict(code):
+    sup = rec("s", "D990000002-01", parent=MAIN, effective=date(2025, 1, 1),
+              terms={"payment_terms": ("ежеквартально до 15 числа", "5.1")})
+    sup.issues.append(Issue(code=code, message="s.pdf: группа ops — ответа нет"))
+    c = run([main(terms={"payment_terms": ("ежемесячно до 10 числа", "5.1")}), sup])
+    assert c.terms["payment_terms"].current.status == ValueStatus.CONFLICT
+
+
+def refused_start(doc_id):
+    return Extracted(value=date(2027, 1, 1), status=ValueStatus.REJECTED, reason="date_role: не дата начала",
+                     source=Source(doc_id=doc_id, page=1, quote="вступает в силу с 01.01.2027"))
+
+
+def test_refused_entry_into_force_makes_the_changes_conflicts_not_dated_by_signing():
+    sup = rec("s", "D990000002-01", parent=MAIN, doc_date=date(2026, 10, 15), ops=[(OpType.REPLACE_CLAUSE, "5.1", None)],
+              terms={"payment_terms": ("ежеквартально", "5.1")},
+              rates=[("Аренда", 150000, None, None), ("Уборка", 500, date(2025, 1, 1), None)])
+    sup.effective_from = refused_start("s")
+    c = run([main(rates=[("Аренда", 100000, None, None)], terms={"payment_terms": ("ежемесячно", "5.1")}), sup])
+    assert [(r.label, r.amount) for r in c.rates] == [("Уборка", Decimal(500))] and c.planned_rates == []
+    assert c.terms["payment_terms"].current.status == ValueStatus.CONFLICT
+    assert any(i.code == "effective_date_unconfirmed" for i in c.issues)
+
+
+def test_termination_without_a_confirmed_date_leaves_the_status_unknown():
+    sup = rec("s", "D990000002-01", parent=MAIN, doc_date=date(2026, 10, 15), ops=[(OpType.TERMINATE, None, None)])
+    sup.effective_from = refused_start("s")
+    assert run([main(), sup]).status == "unknown"
+
+
+def test_supplement_that_states_no_start_applies_from_its_signing_date():
+    sup = rec("s", "D990000002-01", parent=MAIN, doc_date=date(2026, 10, 15), rates=[("Аренда", 150000, None, None)])
+    assert [r.amount for r in run([main(rates=[("Аренда", 100000, None, None)]), sup]).rates] == [Decimal(150000)]
+
+
+def rate_in(doc_id, label, amount, clause, valid_from=None):
+    return RateRow(label=label, amount=Decimal(amount), valid_from=valid_from, status=ValueStatus.ACCEPTED,
+                   source=Source(doc_id=doc_id, page=1, quote="цитата", clause_id=clause))
+
+
+def test_new_wording_of_an_appendix_retires_its_old_rates():
+    m = main()
+    m.rates = [rate_in("m", "Тариф А", 300, "Приложение 7/1"), rate_in("m", "Тариф Б", 400, "Приложение 7/1"),
+               rate_in("m", "Тариф В", 900, "Приложение 7/1", date(2027, 1, 1)), rate_in("m", "Ставка", 50, "4.2")]
+    sup = rec("s", "D990000002-01", parent=MAIN, effective=date(2025, 1, 1),
+              ops=[(OpType.REPLACE_APPENDIX, "Приложение № 7", None)])
+    sup.rates = [rate_in("s", "Тариф А", 500, "Приложение 7/1")]
+    c = run([m, sup])
+    assert [(r.label, r.amount) for r in c.rates] == [("Ставка", Decimal(50)), ("Тариф А", Decimal(500))]
+    assert c.planned_rates == []
+
+
+def test_rate_of_a_rewritten_clause_ends_when_the_new_wording_starts():
+    m = main()
+    m.rates = [rate_in("m", "Ставка", 700, "3.1")]
+    sup = rec("s", "D990000002-01", parent=MAIN, effective=date(2027, 1, 1), ops=[(OpType.REPLACE_CLAUSE, "3.1", None)])
+    assert [r.amount for r in run([m, sup]).rates] == [Decimal(700)]
+    assert run([m, sup], date(2027, 2, 1)).rates == []
+
+
+def test_current_term_knows_when_it_started():
+    c = run([main(terms={"validity": "до 31.12.2025"}),
+             rec("s", "D990000002-01", parent=MAIN, effective=date(2025, 10, 1), terms={"validity": "до 31.12.2026"},
+                 ops=[(OpType.REPLACE_CLAUSE, "7.1", None)])])
+    assert c.terms["validity"].since == date(2025, 10, 1)
+    assert [h.effective_from for h in c.terms["validity"].history] == [date(2022, 8, 23)]
+

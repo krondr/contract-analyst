@@ -7,6 +7,7 @@ from datetime import date
 
 from contract_analyst.labels import TERM_RU
 from contract_analyst.models import (
+    LLM_FAILURES,
     AmendmentOp,
     ChainDoc,
     ConsolidatedContract,
@@ -16,6 +17,7 @@ from contract_analyst.models import (
     Issue,
     OpType,
     RateRow,
+    Source,
     TermChange,
     TermState,
     TimelineEvent,
@@ -38,7 +40,6 @@ def _accepted(ext: Extracted) -> object | None:
 
 REPLACING = {OpType.REPLACE_CLAUSE, OpType.RESTATE_SECTION, OpType.REPLACE_APPENDIX, OpType.RESTATE_DOCUMENT,
              OpType.DELETE_CLAUSE}
-_LLM_FAILURES = {"llm_timeout", "llm_invalid_json"}
 
 _TARGET_APPENDIX = re.compile(r"Приложени\w*\s*(?:№\s*)?(\d+)", re.IGNORECASE)
 _TARGET_RANGE = re.compile(r"(?<![\d.])(\d{1,3})\s*[-–—]\s*(\d{1,3})(?![\d.])")
@@ -88,8 +89,8 @@ def _other_document(target: str | None, contract_number: str) -> bool:
 
 def _ops_reliable(rec: DocumentRecord) -> bool:
     """The supplement's operations were read: the ops group answered and the gate kept every operation found."""
-    failed = any(i.code in _LLM_FAILURES and "группа ops" in i.message for i in rec.issues)
-    return not failed and all(op.status == ValueStatus.ACCEPTED for op in rec.ops)
+    failed = any(i.code in LLM_FAILURES and "группа ops" in i.message for i in rec.issues)
+    return not failed and not rec.refused_ops and all(op.status == ValueStatus.ACCEPTED for op in rec.ops)
 
 
 def _term_mode(clause: str | None, main_ops: list[AmendmentOp], reliable: bool,
@@ -115,10 +116,23 @@ def _end(rec: DocumentRecord) -> date | None:
     return _accepted(rec.effective_to)
 
 
+def document_start(rec: DocumentRecord) -> date | None:
+    """When a document's changes start: its entry into force, or its signing date if it states no other start.
+    A stated start the gate refused leaves it unknown: the signing date would be a guess (spec §6.5)."""
+    if rec.effective_from.status == ValueStatus.ABSENT:
+        return _accepted(rec.doc_date)
+    return _accepted(rec.effective_from)
+
+
 def _effective(rec: DocumentRecord, chain: ContractChain, doc: ChainDoc) -> date | None:
     if doc.role == "main" and chain.main_date is not None and chain.main_date.value is not None:
         return chain.main_date.value
-    return _accepted(rec.effective_from) or _accepted(rec.doc_date)
+    return document_start(rec)
+
+
+def _start_refused(rec: DocumentRecord, doc: ChainDoc) -> bool:
+    """A supplement states when it enters into force, but the gate could not confirm that date."""
+    return doc.role != "main" and rec.effective_from.status not in (ValueStatus.ACCEPTED, ValueStatus.ABSENT)
 
 
 def _summary(rec: DocumentRecord, doc: ChainDoc) -> str:
@@ -162,6 +176,17 @@ class _State:
                  mode: str = "replace") -> None:
         change = TermChange(value=ext.value, effective_from=eff, doc_id=doc_id, source=ext.source)
         state = self.terms.get(name)
+        if mode == "undated":  # the document's start was refused: whether the value applies on as_of is unknown
+            state = state or self.terms.setdefault(name, TermState(name=name, current=Extracted[str](
+                status=ValueStatus.ABSENT)))
+            current = state.current
+            self._retire(name, state)
+            self.since[name] = None
+            sources = [s for s in (current.source if current.status == ValueStatus.ACCEPTED else None, ext.source) if s]
+            state.current = Extracted[str](status=ValueStatus.CONFLICT, alternatives=sources, reason=(
+                f"effective_date_unconfirmed: дата вступления соглашения в силу не подтверждена, поэтому неясно, "
+                f"действует ли «{ext.value}» на {as_of}"))
+            return
         if eff is not None and eff > as_of:
             if state is None:
                 state = self.terms[name] = TermState(name=name, current=Extracted[str](status=ValueStatus.ABSENT))
@@ -190,6 +215,20 @@ class _State:
                                      sources=sources))
             return
         state.current = ext
+
+    def retire_rates(self, target: str | None, start: date | None, as_of: date) -> None:
+        """A clause or appendix in new wording takes its old rates with it: the current ones once the new wording
+        starts, the planned ones that would start on or after it. An unknown start retires them now."""
+        def old(r: RateRow) -> bool:
+            return covers(target, r.source.clause_id if r.source else None) is True
+
+        if start is None or start <= as_of:
+            self.rates = [r for r in self.rates if not old(r)]
+        self.planned_rates = [r for r in self.planned_rates if not old(r)
+                              or (start is not None and r.valid_from is not None and r.valid_from < start)]
+
+    def drop_rate(self, label: str) -> None:
+        self.rates = [r for r in self.rates if r.label != label]
 
     def add_rate(self, row: RateRow, eff: date | None, as_of: date) -> None:
         start = row.valid_from or eff
@@ -224,9 +263,11 @@ def consolidate(chain: ContractChain, records: dict[str, DocumentRecord], as_of:
             issues.append(Issue(code="missing_record", message=f"Документ {doc.doc_id} не разобран"))
             continue
         eff = _effective(rec, chain, doc)
+        refused = _start_refused(rec, doc)
         end = _end(rec) if doc.role != "main" else None
         expired = end is not None and end < as_of
-        summary = _summary(rec, doc) + (f" (истёк {end})" if expired else "")
+        summary = (_summary(rec, doc) + (f" (истёк {end})" if expired else "")
+                   + (" (дата вступления в силу не подтверждена)" if refused else ""))
         timeline.append(TimelineEvent(when=eff, doc_id=doc.doc_id, number=doc.number, summary=summary,
                                       invalidated=doc.invalidated_by is not None))
         if doc.invalidated_by is not None or expired:
@@ -236,23 +277,38 @@ def consolidate(chain: ContractChain, records: dict[str, DocumentRecord], as_of:
                     if op.op in REPLACING and not _other_document(op.target, chain.contract_number)]
         suspensions = [op for op in accepted_ops
                        if op.op == OpType.SUSPEND_PART and not _other_document(op.target, chain.contract_number)]
+        if refused:
+            src = rec.effective_from.source
+            issues.append(Issue(
+                code="effective_date_unconfirmed", sources=[Source(doc_id=doc.doc_id, page=src.page, quote="")] if src
+                else [], message=f"{doc.number or doc.doc_id}: дата вступления в силу не подтверждена "
+                                 f"({(rec.effective_from.reason or '').split(':')[0]}) — изменённые им условия и ставки "
+                                 "не показаны как действующие"))
         restated = any(op.op == OpType.RESTATE_DOCUMENT for op in main_ops)
-        if restated and (eff is None or eff <= as_of):
+        if restated and not refused and (eff is None or eff <= as_of):
             state.reset()
         reliable = _ops_reliable(rec)
         for name, ext in rec.terms.items():
             if ext.status == ValueStatus.ACCEPTED:
-                mode = ("replace" if doc.role == "main" or restated
+                mode = ("undated" if refused else "replace" if doc.role == "main" or restated
                         else _term_mode(state.clause_of(name), main_ops, reliable, suspensions))
                 state.set_term(name, ext, eff, doc.doc_id, as_of, mode=mode)
+        for op in main_ops:
+            state.retire_rates(op.target, None if refused else eff, as_of)
         rows = [row for row in rec.rates if row.status == ValueStatus.ACCEPTED]
         for row in sorted(rows, key=lambda r: r.valid_from or eff or date.min):
-            state.add_rate(row, eff, as_of)
+            if refused and row.valid_from is None:  # its start is the refused date: neither it nor the old rate holds
+                state.drop_rate(row.label)
+            else:
+                state.add_rate(row, eff, as_of)
         for op in accepted_ops:
             when = op.effective_from or eff
             if op.op not in (OpType.TERMINATE, OpType.SUSPEND_PART):
                 continue
-            if when is not None and when > as_of:
+            if when is None and refused:  # when it takes effect is unknown, so is whether it already has
+                if status != "terminated":
+                    status, since = "unknown", None
+            elif when is not None and when > as_of:
                 timeline.append(TimelineEvent(when=when, doc_id=doc.doc_id, number=doc.number,
                                               summary=f"запланировано: {_OP_LABELS[op.op]}"))
             elif op.op == OpType.TERMINATE:
@@ -260,6 +316,8 @@ def consolidate(chain: ContractChain, records: dict[str, DocumentRecord], as_of:
             elif status != "terminated":
                 status, since = "partially_suspended", when
 
+    for name, term in state.terms.items():
+        term.since = state.since.get(name) if term.current.status == ValueStatus.ACCEPTED else None
     return ConsolidatedContract(contract_number=chain.contract_number, as_of=as_of, status=status, status_since=since,
                                 terms=state.terms, rates=state.rates, planned_rates=state.planned_rates,
                                 timeline=timeline, issues=issues + state.issues)

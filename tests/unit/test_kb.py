@@ -2,11 +2,12 @@ import json
 from datetime import date
 from decimal import Decimal
 
+from contract_analyst.agent.steps import unverified_in_kb
 from contract_analyst.assemble.chains import build_chains
 from contract_analyst.assemble.consolidate import consolidate
 from contract_analyst.kb.lemmatize import lemmatize
 from contract_analyst.kb.store import KnowledgeBase
-from contract_analyst.models import Extracted, Party, Source, ValueStatus
+from contract_analyst.models import AmendmentOp, Extracted, OpType, Party, Source, ValueStatus
 from contract_analyst.report.verify import verify_text
 from tests.fixtures.builders import make_record as rec
 from tests.fixtures.builders import text_doc
@@ -95,3 +96,33 @@ def test_valid_refs_and_issues(tmp_path):
     assert "doc:m:p1" in kb.valid_refs() and "doc:m:p2" not in kb.valid_refs()
     assert isinstance(kb.get_issues(MAIN), list)
     assert json.loads((tmp_path / "consolidated.json").read_text(encoding="utf-8"))[MAIN]["as_of"] == "2026-10-30"
+
+
+def saved(tmp_path, records):
+    chains = build_chains(list(records.values()))
+    kb = KnowledgeBase(tmp_path / "kb")
+    kb.save(documents={}, records=records, chains=chains,
+            consolidated={c.contract_number: consolidate(c, records, AS_OF) for c in chains}, clusters=[], decisions=[])
+    return kb
+
+
+def test_refold_at_another_date_still_sees_refused_operations(tmp_path):
+    main = rec("m", MAIN, kind="main", doc_date=date(2024, 1, 10),
+               terms={"payment_terms": ("ежемесячно до 10 числа", "5.1")})
+    sup = rec("s", "D990000002-01", parent=MAIN, effective=date(2025, 1, 1),
+              terms={"payment_terms": ("ежеквартально до 15 числа", "5.1")})
+    sup.ops.append(AmendmentOp(op=OpType.REPLACE_CLAUSE, target="5.1", status=ValueStatus.REJECTED,
+                               reason="not_operative: нет глагола", source=Source(doc_id="s", page=1, quote="цитата")))
+    kb = saved(tmp_path, {"m": main, "s": sup})
+    assert kb.get_contract_terms(MAIN, date(2027, 2, 1)).terms["payment_terms"].current.status == ValueStatus.CONFLICT
+    assert unverified_in_kb(tmp_path / "kb") == []
+
+
+def test_term_history_dates_the_current_value(tmp_path):
+    main = rec("m", MAIN, kind="main", doc_date=date(2021, 1, 21), terms={"validity": "до 31.12.2025"})
+    sup = rec("s", "D990000002-01", parent=MAIN, effective=date(2026, 7, 1), terms={"validity": "до 31.12.2026"},
+              ops=[(OpType.REPLACE_CLAUSE, "7.1", None)])
+    history = saved(tmp_path, {"m": main, "s": sup}).get_term_history(MAIN, "validity")
+    assert [(h.value, h.effective_from) for h in history] == [("до 31.12.2025", date(2021, 1, 21)),
+                                                              ("до 31.12.2026", date(2026, 7, 1))]
+

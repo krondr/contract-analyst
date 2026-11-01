@@ -52,6 +52,7 @@ def _scrub_record(r: DocumentRecord) -> DocumentRecord:
         "parties": [p.model_copy(update={"name": _scrub(p.name), "org_type": _scrub(p.org_type)}) for p in r.parties],
         "rates": [x for x in r.rates if x.status == ValueStatus.ACCEPTED],
         "ops": [x for x in r.ops if x.status == ValueStatus.ACCEPTED],
+        "refused_ops": r.refused_ops + sum(x.status != ValueStatus.ACCEPTED for x in r.ops),
     })
 
 
@@ -128,7 +129,7 @@ class KnowledgeBase:
         if state is None:
             return []
         current = [] if state.current.status not in _KEEP else [TermChange(
-            value=state.current.value, effective_from=None,
+            value=state.current.value, effective_from=state.since,
             doc_id=state.current.source.doc_id if state.current.source else "", source=state.current.source)]
         return [*state.history, *current, *state.planned]
 

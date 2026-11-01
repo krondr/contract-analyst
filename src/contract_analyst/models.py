@@ -157,6 +157,10 @@ class Issue(BaseModel):
     sources: list[Source] = []
 
 
+# Issue codes of a model call that gave no usable answer: what that call should have read stays unknown.
+LLM_FAILURES = frozenset({"llm_timeout", "llm_invalid_json", "llm_truncated"})
+
+
 class DocumentRecord(BaseModel):
     doc_id: str
     file_name: str
@@ -174,6 +178,7 @@ class DocumentRecord(BaseModel):
     terms: dict[str, Extracted[str]] = {}
     rates: list[RateRow] = []
     ops: list[AmendmentOp] = []
+    refused_ops: int = 0  # operations the gate refused; the knowledge base keeps only their number
     issues: list[Issue] = []
 
 
@@ -205,6 +210,7 @@ class TermChange(BaseModel):
 class TermState(BaseModel):
     name: str
     current: Extracted[str]
+    since: date | None = None  # when the current value started to apply
     history: list[TermChange] = []
     planned: list[TermChange] = []
 
