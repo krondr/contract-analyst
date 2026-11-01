@@ -168,3 +168,19 @@ def test_llm_outage_during_a_question_is_an_answer_not_a_crash(tmp_path):
     session = ChatSession(KnowledgeBase(tmp_path / "kb"), Down(), load_settings(), tmp_path / "memory.sqlite")
     answer = session.ask("Какая ставка действует?", "t1")
     assert "ollama serve" in answer
+
+
+def test_rates_reach_the_chat_with_vat_in_words(tmp_path):
+    terms = json.loads(run_chat_tool(kb(tmp_path), "get_contract_terms", {"contract_number": MAIN}))
+    assert terms["rates"] and all("excluded" not in r and "included" not in r and "unknown" not in r
+                                  for r in terms["rates"] + terms.get("planned_rates", []))
+    assert any("НДС" in r for r in terms["rates"])
+
+
+def test_expected_dates_and_amounts_match_in_any_written_form():
+    from contract_analyst.eval.chat_eval import fact_present
+
+    assert fact_present("01.01.2027", "ставка 800 руб. с 2027-01-01 [doc:x:p1]")
+    assert fact_present("01.04.2025", "с «1» апреля 2025 г. плата 120 000 руб.")
+    assert fact_present("120 000", "плата 120000 руб.")
+    assert not fact_present("01.01.2027", "ставка 800 руб. с 2026-01-01")

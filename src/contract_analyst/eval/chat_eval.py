@@ -13,6 +13,7 @@ from contract_analyst.chat.graph import REFUSAL, ChatSession
 from contract_analyst.config import Settings
 from contract_analyst.kb.store import KnowledgeBase
 from contract_analyst.llm.client import LLMClient
+from contract_analyst.parsing.patterns import date_spans
 
 _REF = re.compile(r"\[doc:[^\]]+\]")
 
@@ -35,6 +36,20 @@ class ChatScores(BaseModel):
 
 def _norm(text: str) -> str:
     return re.sub(r"(?<=\d)[\s ](?=\d{3}\b)", "", " ".join(text.casefold().replace("ё", "е").split()))
+
+
+def _dates_to_iso(text: str) -> str:
+    """Every date written as 01.04.2025 or «1» апреля 2025 г. becomes 2025-04-01, so a fact matches whatever form the
+    answer writes it in."""
+    out, last = [], 0
+    for d, start, end in date_spans(text):
+        out += [text[last:start], d.isoformat()]
+        last = end
+    return "".join(out) + text[last:]
+
+
+def fact_present(fact: str, answer: str) -> bool:
+    return _norm(_dates_to_iso(fact)) in _norm(_dates_to_iso(answer))
 
 
 def _is_refusal(answer: str) -> bool:
@@ -65,7 +80,7 @@ def chat_eval(kb_dir: Path, questions: Path, client: LLMClient, settings: Settin
             cited += bool(_REF.search(answer))
         if q.id not in invalid:
             scored += 1
-            correct += refused if q.unanswerable else all(_norm(f) in _norm(answer) for f in q.expected_facts)
+            correct += refused if q.unanswerable else all(fact_present(f, answer) for f in q.expected_facts)
     return ChatScores(accuracy=correct / scored if scored else 1.0,
                       refusal_precision=right_refusals / refusals if refusals else 1.0,
                       with_refs_share=cited / factual if factual else 1.0, answers=answers, invalid=invalid)
