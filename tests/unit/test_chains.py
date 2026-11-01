@@ -93,3 +93,25 @@ def test_self_referencing_document_is_the_main():
 def test_draft_main_flagged():
     (chain,) = build_chains([rec("m", MAIN, kind="main", is_draft=True)])
     assert "draft_main" in codes(chain)
+
+
+def test_supplement_amending_another_supplement_joins_the_root_chain():
+    (chain,) = build_chains([rec("m", MAIN, kind="main", doc_date=date(2021, 1, 21)),
+                             rec("s1", "D990000002-01", parent=MAIN, effective=date(2024, 1, 1)),
+                             rec("s2", "D990000003-01", parent="D990000002-01", effective=date(2024, 6, 1))])
+    assert [d.doc_id for d in chain.docs] == ["m", "s1", "s2"]
+    assert "amends_supplement" in codes(chain) and "missing_main" not in codes(chain)
+
+
+def test_duplicate_main_prefers_the_earliest_signed_original():
+    original = rec("zz", MAIN, kind="main", doc_date=date(2021, 1, 21))
+    restated = rec("aa", MAIN, kind="main", doc_date=date(2024, 3, 1))
+    (chain,) = build_chains([original, restated])
+    assert chain.main_doc_id == "zz" and [d.doc_id for d in chain.docs] == ["zz", "aa"]
+
+
+def test_same_effective_date_orders_by_signing_date_before_number():
+    a = rec("a", "D990000002-01", parent=MAIN, doc_date=date(2024, 3, 1), effective=date(2024, 4, 1))
+    b = rec("b", "D990000009-01", parent=MAIN, doc_date=date(2024, 2, 1), effective=date(2024, 4, 1))
+    (chain,) = build_chains([rec("m", MAIN, kind="main", doc_date=date(2021, 1, 21)), a, b])
+    assert [d.doc_id for d in chain.docs] == ["m", "b", "a"]

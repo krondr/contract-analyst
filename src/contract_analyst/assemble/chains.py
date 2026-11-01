@@ -33,14 +33,17 @@ def _parent_number(rec: DocumentRecord) -> str | None:
 
 
 def _order(rec: DocumentRecord) -> tuple[str, str]:
+    """Sort key: effective date, then signing date, then number; and what the order rests on."""
     number = _value(rec.number) or rec.doc_id
+    signed = _value(rec.doc_date)
+    signed_key = signed.isoformat() if signed is not None else "9999-99-99"
     if (eff := _value(rec.effective_from)) is not None:
-        return f"{eff.isoformat()}|{number}", "effective_from"
-    if (signed := _value(rec.doc_date)) is not None:
-        return f"{signed.isoformat()}|{number}", "doc_date"
+        return f"{eff.isoformat()}|{signed_key}|{number}", "effective_from"
+    if signed is not None:
+        return f"{signed_key}|{signed_key}|{number}", "doc_date"
     m = _YEAR_RE.match(str(number))
     year = 2000 + int(m.group(1)) if m else 9999
-    return f"{year}-99-99|{number}", "number"
+    return f"{year}-99-99|9999-99-99|{number}", "number"
 
 
 def _is_root(rec: DocumentRecord) -> bool:
@@ -88,26 +91,44 @@ def _main_date(main: DocumentRecord | None, sups: list[DocumentRecord], issues: 
                            alternatives=[s for _, s in stated if s], reason="разные даты в ссылках ДС")
 
 
+def _root_number(number: str, parent_of: dict[str, str]) -> str:
+    """Follow parent links from a supplement's number up to the contract its chain belongs to."""
+    seen: set[str] = set()
+    while number in parent_of and number not in seen:
+        seen.add(number)
+        number = parent_of[number]
+    return number
+
+
 def build_chains(records: list[DocumentRecord]) -> list[ContractChain]:
     by_number: dict[str, DocumentRecord] = {}
     for r in records:
         if (number := _value(r.number)) is not None:
             by_number.setdefault(number, r)
+    parent_of = {number: parent for r in records if not _is_root(r)
+                 and (number := _value(r.number)) and (parent := _parent_number(r)) and parent != number}
     roots: dict[str, list[DocumentRecord]] = defaultdict(list)
     members: dict[str, list[DocumentRecord]] = defaultdict(list)
+    amends: dict[str, list[tuple[DocumentRecord, str]]] = defaultdict(list)
     loose: list[DocumentRecord] = []
     for r in records:
         if _is_root(r):
             roots[_value(r.number)].append(r)
         elif (parent := _parent_number(r)) is not None:
-            members[parent].append(r)
+            root = _root_number(parent, parent_of)
+            members[root].append(r)
+            if root != parent:
+                amends[root].append((r, parent))
         else:
             loose.append(r)
 
     chains: list[ContractChain] = []
     for key in sorted(set(roots) | set(members)):
-        issues: list[Issue] = []
-        candidates = sorted(roots.get(key, []), key=lambda r: (r.is_draft, r.doc_id))
+        issues: list[Issue] = [
+            Issue(code="amends_supplement", message=f"{_value(r.number) or r.file_name} изменяет соглашение {parent}, "
+                                                    f"а не сам договор {key}", sources=[s for s in [r.parent.source] if s])
+            for r, parent in amends.get(key, [])]
+        candidates = sorted(roots.get(key, []), key=lambda r: (r.is_draft, _value(r.doc_date) or date.max, r.doc_id))
         main = candidates[0] if candidates else None
         if len(candidates) > 1:
             issues.append(Issue(code="duplicate_main", message=f"Несколько документов претендуют на основной договор {key}"))
