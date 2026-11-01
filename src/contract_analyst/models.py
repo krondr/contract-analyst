@@ -84,6 +84,12 @@ class Clause(BaseModel):
     clause_id: str  # "preamble", "1.25", "12.2", "Приложение 7"
     page: int
     text: str
+    appendix: str | None = None  # "Приложение 1" for a clause inside an appendix
+
+    @property
+    def ref(self) -> str:
+        """Reference unique within a document: "12.2" or "Приложение 1/1.6"."""
+        return f"{self.appendix}/{self.clause_id}" if self.appendix and self.clause_id != self.appendix else self.clause_id
 
 
 class DocumentText(BaseModel):

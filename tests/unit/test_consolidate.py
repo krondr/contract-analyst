@@ -1,9 +1,11 @@
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from contract_analyst.assemble.chains import build_chains
-from contract_analyst.assemble.consolidate import consolidate
-from contract_analyst.models import OpType
+from contract_analyst.assemble.consolidate import consolidate, covers
+from contract_analyst.models import Issue, OpType, ValueStatus
 from tests.fixtures.builders import make_record as rec
 
 MAIN = "D990000001-01"
@@ -108,3 +110,81 @@ def test_supplement_that_only_adds_obligations_combines_terms():
     current = c.terms["payment_terms"].current
     assert current.value == "оплата ежемесячно; сервисные услуги оплачиваются ежеквартально"
     assert current.alternatives and c.terms["payment_terms"].history == []
+
+
+@pytest.mark.parametrize(("target", "clause", "expected"), [
+    ("12.2", "12.2", True), ("п. 12.2", "12.2.1", True), ("пункт 12", "12.3", True), ("12.2", "12.1", False),
+    ("12.2", "Приложение 1/12.2", False), ("Приложение 1, п. 1.6", "Приложение 1/1.6", True),
+    ("п. 1.6 Приложения № 1", "Приложение 1/1.6", True), ("Приложение 1, п. 1.6", "1.6", False),
+    ("Приложение № 3", "Приложение 3/2.1", True), ("Приложение 3", "Приложение 3", True),
+    ("Приложение 3", "3.1", False), ("п. 1-8", "5.2", True), ("разделы 1–8", "9.1", False),
+    ("1-8", "Приложение 1/5.2", False), ("«К настоящему Соглашению прилагается»", "5.2", None),
+    ("12.2", None, None), ("D990000001-01 п. 5.2", "5.2", True),
+])
+def test_covers(target, clause, expected):
+    assert covers(target, clause) is expected
+
+
+def test_supplement_amending_another_document_adds_to_the_contract_terms():
+    c = run([main(terms={"payment_terms": "оплата в течение 10 рабочих дней"}),
+             rec("s", "D990000002-01", parent=MAIN, effective=date(2024, 5, 1),
+                 terms={"payment_terms": "вознаграждение за сервисные услуги ежемесячно"},
+                 ops=[(OpType.RESTATE_SECTION, "D990000009-01 п. 1-14", None)])])
+    assert c.terms["payment_terms"].current.value == ("оплата в течение 10 рабочих дней; "
+                                                       "вознаграждение за сервисные услуги ежемесячно")
+
+
+def test_replaced_clause_replaces_only_the_term_taken_from_it():
+    c = run([main(terms={"notification_channel": ("уведомления по факсу", "12.1"),
+                         "payment_terms": ("60% от начислений", "Приложение 1/1.6")}),
+             rec("s", "D990000002-01", parent=MAIN, effective=date(2023, 11, 1),
+                 terms={"notification_channel": "копии по электронной почте", "payment_terms": "65% от начислений"},
+                 ops=[(OpType.REPLACE_CLAUSE, "12.2", None), (OpType.REPLACE_CLAUSE, "Приложение 1, п. 1.6", None)])])
+    assert c.terms["notification_channel"].current.value == "уведомления по факсу; копии по электронной почте"
+    payment = c.terms["payment_terms"]
+    assert payment.current.value == "65% от начислений"
+    assert [(h.value, h.effective_from) for h in payment.history] == [("60% от начислений", date(2022, 8, 23))]
+
+
+def test_change_with_unidentified_operations_is_a_conflict():
+    s = rec("s", "D990000002-01", parent=MAIN, effective=date(2025, 10, 1), terms={"validity": "до 31.12.2026"})
+    s.issues.append(Issue(code="llm_invalid_json", message="s.pdf: группа ops — ответ не разобран"))
+    c = run([main(terms={"validity": "до 31.12.2025"}), s])
+    current = c.terms["validity"].current
+    assert current.status == "conflict" and current.reason.startswith("ops_not_identified")
+    assert [a.doc_id for a in current.alternatives] == ["m", "s"]
+    assert "ops_not_identified" in [i.code for i in c.issues]
+
+
+def test_rejected_operation_makes_the_change_a_conflict():
+    s = rec("s", "D990000002-01", parent=MAIN, effective=date(2025, 10, 1), terms={"validity": "до 31.12.2026"},
+            ops=[(OpType.REPLACE_CLAUSE, "7.1", None)])
+    s.ops[0].status = ValueStatus.REJECTED
+    assert run([main(terms={"validity": ("до 31.12.2025", "7.1")}), s]).terms["validity"].current.status == "conflict"
+
+
+def test_operation_end_date_does_not_expire_the_supplement():
+    s = rec("s", "D990000002-01", parent=MAIN, effective=date(2026, 7, 1), rates=RATES,
+            ops=[(OpType.REPLACE_APPENDIX, "Приложение 7", date(2026, 7, 1))])
+    s.ops[0].effective_to = date(2026, 12, 31)
+    c = run([main(rates=[("Тариф Макс", 500, None, None)]), s], date(2027, 2, 1))
+    assert [r.amount for r in c.rates] == [Decimal(1200)]
+
+
+def test_rate_rows_apply_in_date_order_whatever_the_extraction_order():
+    rows = [("Тариф", 800, date(2027, 1, 1), None), ("Тариф", 500, date(2026, 7, 1), None)]
+    c = run([main(), rec("s", "D990000002-01", parent=MAIN, effective=date(2026, 7, 1), rates=rows)], date(2027, 2, 1))
+    assert [r.amount for r in c.rates] == [Decimal(800)]
+
+
+def test_status_unknown_when_no_date_is_known():
+    c = run([rec("s", "D990000002-01", parent=MAIN, terms={"validity": "до 2027"})])
+    assert c.status == "unknown" and "no_dates" in [i.code for i in c.issues]
+
+
+def test_as_of_before_every_known_date_is_not_yet_in_force():
+    m = rec("m", MAIN, kind="main", rejected_date=date(2016, 5, 5))
+    assert run([m, rec("s", "D990000002-01", parent=MAIN, effective=date(2017, 1, 1))], date(2001, 1, 1)).status == \
+        "not_yet_in_force"
+    assert run([rec("s", "D990000002-01", parent=MAIN, effective=date(2017, 1, 1))], date(2001, 1, 1)).status == \
+        "not_yet_in_force"

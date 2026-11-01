@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from datetime import date
+from functools import lru_cache
 
 from pydantic import BaseModel
+from rapidfuzz import fuzz
 
 from contract_analyst.config import Settings
 from contract_analyst.gate.checks import (
     CheckResult,
     ValueKind,
+    _norm,
     check_format,
     check_not_redacted,
     check_ocr_confidence,
@@ -46,8 +49,28 @@ def _page(doc: DocumentText, number: int | None) -> Page | None:
     return doc.pages[number - 1]
 
 
+_CLAUSE_FUZZY = 90
+_norm_cached = lru_cache(maxsize=8192)(_norm)
+
+
+def clause_at(doc: DocumentText, page: int, quote: str) -> str | None:
+    """Reference of the clause holding the quote: the nearest clause that starts on or before the quote's page."""
+    q = _norm(quote)
+    before = [c for c in doc.clauses if c.page <= page]
+    if not q or not before:
+        return None
+    for clause in reversed(before):
+        if q in _norm_cached(clause.text):
+            return clause.ref
+    score, best = max(((fuzz.partial_ratio(q, _norm_cached(c.text)), c) for c in before if c.page >= page - 1),
+                      key=lambda item: item[0], default=(0, None))
+    return best.ref if best is not None and score >= _CLAUSE_FUZZY else None
+
+
 def _source(doc: DocumentText, page: int | None, quote: str | None) -> Source | None:
-    return Source(doc_id=doc.doc_id, page=page, quote=quote) if page and quote else None
+    if not page or not quote:
+        return None
+    return Source(doc_id=doc.doc_id, page=page, quote=quote, clause_id=clause_at(doc, page, quote))
 
 
 def _reason(check: CheckResult) -> str:

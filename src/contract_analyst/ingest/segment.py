@@ -8,6 +8,8 @@ from contract_analyst.models import Clause, Page
 
 _CLAUSE_RE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3}){1,3}|\d{1,3}(?=\.))\.?\s+\S")
 _APPENDIX_RE = re.compile(r"^\s*Приложение\s*№\s*(\d+)", re.IGNORECASE)
+# Only a heading line opens an appendix ("Приложение № 1" alone or "… к Договору"), not a sentence that names one.
+_APPENDIX_HEADING_RE = re.compile(r"^\s*Приложение\s*№\s*(\d+)\s*(?:к\s|$)", re.IGNORECASE)
 
 
 def _clause_id(line: str) -> str | None:
@@ -21,18 +23,21 @@ def _clause_id(line: str) -> str | None:
 def segment_clauses(pages: list[Page]) -> list[Clause]:
     clauses: list[Clause] = []
     current_id, current_page, buffer = "preamble", pages[0].number if pages else 1, []
+    appendix = current_appendix = None
 
     def flush() -> None:
         text = "\n".join(buffer).strip()
         if text:
-            clauses.append(Clause(clause_id=current_id, page=current_page, text=text))
+            clauses.append(Clause(clause_id=current_id, page=current_page, text=text, appendix=current_appendix))
 
     for page in pages:
         for line in page.text.split("\n"):
             new_id = _clause_id(line)
             if new_id:
                 flush()
-                current_id, current_page, buffer = new_id, page.number, []
+                if heading := _APPENDIX_HEADING_RE.match(line):
+                    appendix = f"Приложение {heading.group(1)}"
+                current_id, current_page, buffer, current_appendix = new_id, page.number, [], appendix
             buffer.append(line)
     flush()
     return clauses

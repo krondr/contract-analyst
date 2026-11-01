@@ -109,3 +109,13 @@ def test_cli_golden_diff_writes_json(tmp_path):
     res = CliRunner().invoke(app, ["golden", "diff", str(tmp_path / "a.yaml"), str(tmp_path / "b.yaml"),
                                    "--out", str(tmp_path / "d.json")])
     assert res.exit_code == 0 and json.loads((tmp_path / "d.json").read_text())[0]["path"] == "documents[d1].city"
+
+
+def test_golden_values_carry_the_clause_they_quote():
+    from contract_analyst.eval.golden_tools import _to_record
+
+    page = "Договор № D990000001-01\n12.1. Уведомления направляются по факсу.\n12.2. Копии имеют силу оригинала."
+    gdoc = _gdoc(terms={"notification_channel": GoldenValue(value="по факсу", page=1,
+                                                            quote="Уведомления направляются по факсу.")})
+    record = _to_record(gdoc, text_doc([page], doc_id="d1"))
+    assert record.terms["notification_channel"].source.clause_id == "12.1"

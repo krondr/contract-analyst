@@ -108,17 +108,19 @@ def text_doc(pages: list[str], doc_id: str = "doc000000001", name: str = "mem.pd
     return DocumentText(doc_id=doc_id, file=file, pages=built, clauses=segment_clauses(built), status="ok")
 
 
-def acc(value, doc_id: str = "d", quote: str = "цитата", page: int = 1):
+def acc(value, doc_id: str = "d", quote: str = "цитата", page: int = 1, clause: str | None = None):
     """Accepted Extracted value with a source."""
     from contract_analyst.models import Extracted, Source, ValueStatus
 
-    return Extracted(value=value, status=ValueStatus.ACCEPTED, source=Source(doc_id=doc_id, page=page, quote=quote))
+    return Extracted(value=value, status=ValueStatus.ACCEPTED,
+                     source=Source(doc_id=doc_id, page=page, quote=quote, clause_id=clause))
 
 
 def make_record(doc_id: str, number: str | None, kind: str = "supplement", doc_date=None, parent: str | None = None,
                 parent_date=None, effective=None, effective_to=None, ops=(), terms: dict | None = None, rates=(), party_names=(),
                 category: str = "other", is_draft: bool = False, file_name: str | None = None, rejected_date=None):
-    """DocumentRecord for assembly tests. ops: (OpType, target, effective_from); rates: (label, amount, from, to)."""
+    """DocumentRecord for assembly tests. ops: (OpType, target, effective_from); rates: (label, amount, from, to);
+    a term is a value or (value, clause_id)."""
     from decimal import Decimal
 
     from contract_analyst.models import (
@@ -147,7 +149,7 @@ def make_record(doc_id: str, number: str | None, kind: str = "supplement", doc_d
         effective_from=acc(effective, doc_id) if effective else absent(),
         effective_to=acc(effective_to, doc_id) if effective_to else absent(), subject_category=acc(category, doc_id),
         parties=[Party(role=f"p{i}", org_type=acc("ООО", doc_id), name=acc(n, doc_id)) for i, n in enumerate(party_names)],
-        terms={k: acc(v, doc_id) for k, v in (terms or {}).items()},
+        terms={k: acc(v[0], doc_id, clause=v[1]) if isinstance(v, tuple) else acc(v, doc_id) for k, v in (terms or {}).items()},
         rates=[RateRow(label=label, amount=Decimal(str(amount)), valid_from=vf, valid_to=vt, status=ValueStatus.ACCEPTED,
                        source=src) for label, amount, vf, vt in rates],
         ops=[AmendmentOp(op=op, target=target, effective_from=eff, status=ValueStatus.ACCEPTED, source=src)

@@ -105,3 +105,14 @@ def test_rate_reanchored_in_table_with_cells_on_separate_lines():
     assert row.status == "accepted" and row.source.quote == "Оптима 330,5 500"
     wrong = gate_rate(RateOut(label="Оптима", amount="270", page=1, quote="Ставка"), table, load_settings())
     assert wrong.status == "rejected"
+
+
+def test_accepted_value_source_names_its_clause():
+    doc = text_doc([("12.2. Уведомления направляются по факсу.\nПриложение № 1\nк Договору\n"
+                     "1.6. Вознаграждение составляет 60% от начислений.")])
+    s = load_settings()
+    notice = apply_gate(Candidate(field="notification_channel", value="по факсу", kind="text", page=1,
+                                  quote="Уведомления направляются по факсу."), doc, s)
+    fee = apply_gate(Candidate(field="payment_terms", value="60% от начислений", kind="text", page=1,
+                               quote="Вознаграждение составляет 60% от начислений"), doc, s)
+    assert (notice.source.clause_id, fee.source.clause_id) == ("12.2", "Приложение 1/1.6")

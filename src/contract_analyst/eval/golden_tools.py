@@ -171,7 +171,9 @@ def diff_golden(a: GoldenSet, b: GoldenSet) -> list[GoldenDiff]:
     return diffs
 
 
-def _to_record(doc: GoldenDocument):
+def _to_record(doc: GoldenDocument, text: DocumentText | None = None):
+    """DocumentRecord from golden values; with the document's text, each value's source names its clause."""
+    from contract_analyst.gate.gate import clause_at
     from contract_analyst.models import (
         AmendmentOp,
         DocumentRecord,
@@ -185,8 +187,9 @@ def _to_record(doc: GoldenDocument):
     def ext(v: GoldenValue):
         if v.status != "accepted" or v.value is None:
             return Extracted(status=v.status if v.status != "accepted" else ValueStatus.ABSENT)
+        clause = clause_at(text, v.page, v.quote) if text is not None and v.page and v.quote else None
         return Extracted(value=v.value, status=ValueStatus.ACCEPTED,
-                         source=Source(doc_id=doc.doc_id, page=v.page or 1, quote=v.quote or ""))
+                         source=Source(doc_id=doc.doc_id, page=v.page or 1, quote=v.quote or "", clause_id=clause))
 
     parent = (Extracted(value=ParentRef(number=doc.parent_number.value,
                                         date_stated=doc.parent_date.value if doc.parent_date.status == "accepted" else None),
@@ -256,7 +259,7 @@ def check_golden(gs: GoldenSet, docs: dict[str, DocumentText], required_traps: s
         if chain.main_doc_id and chain.main_doc_id not in chain.order:
             errors.append(f"chains[{chain.contract_number}]: main_doc_id not in order")
 
-    records = [_to_record(d) for d in gs.documents]
+    records = [_to_record(d, docs.get(d.doc_id)) for d in gs.documents]
     by_id = {r.doc_id: r for r in records}
     built = {c.contract_number: c for c in build_chains(records)}
     for chain in gs.chains:
