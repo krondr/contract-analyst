@@ -1,6 +1,7 @@
 # Defaults for contract-analyst. Values marked "E1/E2/E3/E4" are set from experiment winners.
 llm_model: "ollama:qwen3:8b"          # E2
 ollama_url: "http://localhost:11434"   # overridden by CA_OLLAMA_URL; a non-loopback host needs CA_ALLOW_REMOTE_LLM=1
+openai_base_url: "http://localhost:8000/v1"  # for llm_model openai:<model> (vLLM, LM Studio, ...); CA_OPENAI_BASE_URL, key in CA_OPENAI_API_KEY
 llm_num_ctx: 16384
 llm_batch_tokens: 6000
 # Output caps. Ollama's own default is unlimited with context shifting, so a degenerate answer streams forever.

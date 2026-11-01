@@ -1,0 +1,114 @@
+import json
+
+import httpx
+import pytest
+from pydantic import BaseModel
+
+from contract_analyst.llm.client import LLMUnavailable
+
+M = [{"role": "system", "content": "Ты — агент."}, {"role": "user", "content": "Опись: a1"}]
+
+
+class Out(BaseModel):
+    a: int
+
+
+def client(handler, **kw):
+    from contract_analyst.llm.openai_client import OpenAICompatClient
+
+    return OpenAICompatClient("qwen3-8b", "http://localhost:8000/v1", transport=httpx.MockTransport(handler), **kw)
+
+
+def answer(message, finish="stop", usage=None):
+    return httpx.Response(200, json={"choices": [{"message": message, "finish_reason": finish}],
+                                     "usage": usage or {"prompt_tokens": 10, "completion_tokens": 5}})
+
+
+def test_chat_sends_tools_capped_and_greedy_and_maps_calls_and_reasoning():
+    sent = {}
+
+    def handler(request):
+        sent["url"], sent["auth"] = str(request.url), request.headers.get("authorization")
+        sent["body"] = json.loads(request.content)
+        return answer({"content": "", "reasoning_content": "Сначала разберу опись.",
+                       "tool_calls": [{"id": "c1", "type": "function",
+                                       "function": {"name": "analyze_document", "arguments": '{"doc_id": "a1"}'}}]})
+
+    tools = [{"type": "function", "function": {"name": "analyze_document", "parameters": {}}}]
+    turn = client(handler, api_key="secret", max_tokens=1234).chat(M, tools)
+    assert sent["url"] == "http://localhost:8000/v1/chat/completions" and sent["auth"] == "Bearer secret"
+    body = sent["body"]
+    assert body["model"] == "qwen3-8b" and body["tools"] == tools and body["max_tokens"] == 1234
+    assert body["temperature"] == 0 and body["messages"] == M
+    assert turn.tool_calls[0].name == "analyze_document" and turn.tool_calls[0].args == {"doc_id": "a1"}
+    assert turn.reasoning == "Сначала разберу опись."
+
+
+def test_thinking_turn_uses_its_own_cap_and_sampling():
+    bodies = []
+    c = client(lambda r: bodies.append(json.loads(r.content)) or answer({"content": "ok"}), think_max_tokens=777)
+    c.chat(M, think=True)
+    assert bodies[0]["max_tokens"] == 777 and bodies[0]["temperature"] == 0.6 and bodies[0]["top_p"] == 0.95
+
+
+def test_history_with_tool_calls_is_sent_in_openai_form():
+    bodies = []
+    history = [*M, {"role": "assistant", "content": "", "reasoning": "думаю",
+                    "tool_calls": [{"id": "c1", "name": "list_inputs", "args": {"thought": "смотрю"}}]},
+               {"role": "tool", "tool_call_id": "c1", "name": "list_inputs", "content": '{"status": "ok"}'}]
+    client(lambda r: bodies.append(json.loads(r.content)) or answer({"content": "Готово"})).chat(history)
+    assistant, tool = bodies[0]["messages"][2:]
+    assert assistant == {"role": "assistant", "content": "", "tool_calls": [
+        {"id": "c1", "type": "function", "function": {"name": "list_inputs", "arguments": '{"thought": "смотрю"}'}}]}
+    assert tool == {"role": "tool", "tool_call_id": "c1", "content": '{"status": "ok"}'}
+
+
+def test_structured_asks_for_the_schema_and_counts_usage_and_truncation():
+    bodies = []
+    c = client(lambda r: bodies.append(json.loads(r.content)) or answer({"content": '{"a": 1'}, finish="length",
+                                                                         usage={"prompt_tokens": 7, "completion_tokens": 3}))
+    assert c.structured(M, Out) == '{"a": 1'
+    fmt = bodies[0]["response_format"]
+    assert fmt["type"] == "json_schema" and fmt["json_schema"]["schema"] == Out.model_json_schema()
+    assert c.usage == {"calls": 1, "input_tokens": 7, "output_tokens": 3, "truncated": 1}
+
+
+def test_server_error_is_a_transport_error_the_run_survives():
+    from contract_analyst.llm.ollama_client import TRANSPORT_ERRORS
+
+    with pytest.raises(TRANSPORT_ERRORS):
+        client(lambda r: httpx.Response(503, text="overloaded")).chat(M)
+
+
+def test_unavailable_server_wrong_key_or_missing_model_give_hints():
+    def down(request):
+        raise httpx.ConnectError("refused")
+
+    with pytest.raises(LLMUnavailable, match="не отвечает"):
+        client(down).check_available()
+    with pytest.raises(LLMUnavailable, match="CA_OPENAI_API_KEY"):
+        client(lambda r: httpx.Response(401)).check_available()
+    with pytest.raises(LLMUnavailable, match="qwen3-8b"):
+        client(lambda r: httpx.Response(200, json={"data": [{"id": "other"}]})).check_available()
+    client(lambda r: httpx.Response(200, json={"data": [{"id": "qwen3-8b"}]})).check_available()
+
+
+def test_remote_server_needs_explicit_permission(monkeypatch):
+    from contract_analyst.llm.openai_client import OpenAICompatClient
+
+    monkeypatch.delenv("CA_ALLOW_REMOTE_LLM", raising=False)
+    with pytest.raises(LLMUnavailable, match="CA_ALLOW_REMOTE_LLM"):
+        OpenAICompatClient("m", "https://llm.example.com/v1")
+    monkeypatch.setenv("CA_ALLOW_REMOTE_LLM", "1")
+    OpenAICompatClient("m", "https://llm.example.com/v1")
+
+
+def test_factory_builds_a_cached_openai_client(tmp_path, monkeypatch):
+    from contract_analyst.config import load_settings
+    from contract_analyst.llm.cache import CachingClient
+    from contract_analyst.llm.factory import get_llm_client
+
+    monkeypatch.setenv("CA_OPENAI_BASE_URL", "http://127.0.0.1:9000/v1")
+    client_ = get_llm_client(load_settings(llm_model="openai:qwen3-8b"), tmp_path / "c.sqlite")
+    assert isinstance(client_, CachingClient)
+    assert client_.inner.base_url == "http://127.0.0.1:9000/v1" and client_.model_name == "openai:qwen3-8b"

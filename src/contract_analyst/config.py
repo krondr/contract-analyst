@@ -29,6 +29,7 @@ disable_remote_tracing()
 class Settings(BaseModel):
     llm_model: str = "ollama:qwen3:8b"
     ollama_url: str = "http://localhost:11434"
+    openai_base_url: str = "http://localhost:8000/v1"  # for openai:<model>
     llm_num_ctx: int = 16384
     llm_batch_tokens: int = 6000
     llm_max_tokens: int = 4096
@@ -60,5 +61,7 @@ def load_settings(path: Path | None = None, **overrides) -> Settings:
     data = yaml.safe_load((path or DEFAULT_CONFIG).read_text(encoding="utf-8")) or {}
     if url := os.environ.get("CA_OLLAMA_URL"):
         data["ollama_url"] = url
+    if url := os.environ.get("CA_OPENAI_BASE_URL"):
+        data["openai_base_url"] = url
     data.update(overrides)
     return Settings.model_validate(data)
