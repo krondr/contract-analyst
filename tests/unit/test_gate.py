@@ -252,6 +252,43 @@ def test_op_date_comes_from_its_own_sentence_or_the_entry_into_force():
     assert terminate(undated, "2021-01-21", quote).status == "conflict"
 
 
+@pytest.mark.parametrize("op,text,quote", [
+    ("terminate", "4.3. Договор может быть расторгнут по соглашению Сторон с 01.07.2026.",
+     "Договор может быть расторгнут по соглашению Сторон"),
+    ("terminate", "4.3. Договор может быть расторгнут по соглашению Сторон с 01.07.2026.",
+     "расторгнут по соглашению Сторон с 01.07.2026"),
+    ("terminate", "4.4. Арендодатель вправе расторгнуть Договор с 01.07.2026 в одностороннем порядке.",
+     "Арендодатель вправе расторгнуть Договор с 01.07.2026"),
+    ("terminate", "4.5. В случае просрочки оплаты Договор расторгается с 01.07.2026.",
+     "Договор расторгается с 01.07.2026"),
+    ("terminate", "1. Договор не расторгается и действует до 01.07.2026.", "Договор не расторгается"),
+    ("suspend_part", "2. Компания вправе прекратить привлечение новых абонентов с 01.07.2026.",
+     "прекратить привлечение новых абонентов с 01.07.2026"),
+    ("restate_document", "1. Договор (в редакции Дополнительного соглашения № 1 от 01.07.2026) действует.",
+     "Договор (в редакции Дополнительного соглашения № 1 от 01.07.2026)")])
+def test_high_stakes_op_without_operative_wording_is_rejected(op, text, quote):
+    r = gate_op(OpOut(op=op, effective_from="2026-07-01", page=1, quote=quote), text_doc([text]), load_settings())
+    assert r.status == "rejected" and r.reason.startswith("not_operative")
+
+
+@pytest.mark.parametrize("op,text", [
+    ("terminate", "1. Стороны договорились расторгнуть Договор с 01.07.2026."),
+    ("terminate", "1. Договор считается расторгнутым с 01.07.2026."),
+    ("terminate", "1. Стороны пришли к соглашению о расторжении Договора с 01.07.2026."),
+    ("suspend_part", "1. Прекратить с 01.07.2026 привлечение новых абонентов по Договору."),
+    ("restate_document", "1. Изложить Договор в новой редакции с 01.07.2026 согласно Приложению № 1.")])
+def test_high_stakes_op_with_operative_wording_is_accepted(op, text):
+    quote = text.split(". ", 1)[1].rstrip(".")
+    assert gate_op(OpOut(op=op, effective_from="2026-07-01", page=1, quote=quote), text_doc([text]),
+                   load_settings()).status == "accepted"
+
+
+def test_terminate_without_a_date_is_conflict():
+    doc = text_doc(["1. Стороны договорились расторгнуть Договор."])
+    r = gate_op(OpOut(op="terminate", page=1, quote="Стороны договорились расторгнуть Договор"), doc, load_settings())
+    assert r.status == "conflict" and r.reason.startswith("terminate_without_date")
+
+
 def test_rate_reanchoring_with_several_candidates_is_conflict():
     doc = text_doc(["Ставки на 2026 год:\nТариф А 700\nСтавки на 2027 год:\nТариф А: 700 рублей"])
     r = gate_rate(RateOut(label="Тариф А", amount="700", page=1, quote="Ставки на 2026 год"), doc, load_settings())

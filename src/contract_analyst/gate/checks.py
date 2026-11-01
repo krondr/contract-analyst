@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from rapidfuzz import fuzz
 
 from contract_analyst.ingest.normalize import is_redacted, normalize_text
-from contract_analyst.models import Page, PageMethod
+from contract_analyst.models import OpType, Page, PageMethod
 from contract_analyst.parsing.patterns import (
     DOC_NUMBER_RE,
     date_spans,
@@ -37,6 +37,18 @@ _TOKEN_RE = re.compile(r"[0-9A-Za-zА-Яа-яЁё-]{3,}")
 _SENTENCE_END = re.compile(r"(?<=[^\W\d_]{4})[.!?](?=\s|$)|;|\n(?=\d{1,3}(?:\.\d{1,3})*\.?\s)")
 _IN_FORCE = re.compile(r"вступа\w*\s+в\s+(?:силу|действие)|распростран\w*", re.IGNORECASE)
 _REFERENCE = re.compile(r"\bот\s*$", re.IGNORECASE)  # «Договор от 21.01.2021» names a document, not a period
+# Wording that carries an operation out, per operation type: every pattern must match. «Договор может быть
+# расторгнут» only allows a termination, so permissive or conditional wording in the sentence refuses it.
+_AGREED_ON = r"(?:договорились|пришли\s+к\s+соглашению|достигли\s+соглашения)\s+о\s+"
+_STOPS = r"прекрат(?:ить|ил\w*)|прекраща(?:ет|ют|ется|ются)\b"
+_OPERATIVE = {
+    OpType.TERMINATE: [rf"расторг(?:нуть|ается|аются|нут\w*)|{_STOPS}|{_AGREED_ON}(?:расторжении|прекращении)"],
+    OpType.SUSPEND_PART: [rf"{_STOPS}|приостан(?:овить|овлен\w*|авлива\w*)|{_AGREED_ON}(?:прекращении|приостановлении)"],
+    OpType.RESTATE_DOCUMENT: [r"изложить|излага(?:ется|ются)|изложен\w*|читать|принять", r"редакци"],
+}
+_PERMISSIVE = re.compile(r"\bмо(?:жет|гут)\b|\bвправе\b|\bиме(?:ет|ют)\s+право\b|\bв\s+случа(?:е|ях)\b"
+                         r"|\bпри\s+условии\b|\bесли\b|\bподлеж\w*", re.IGNORECASE)
+_NEGATED = re.compile(r"\bне\s+(?:\S+\s+)?$", re.IGNORECASE)
 
 
 class CheckResult(BaseModel):
@@ -306,6 +318,25 @@ def check_op_dates_near(dates: list[date | None], page: Page, spans: list[Span],
         return _fail("date_not_near", f"даты {_show(missing[0])} нет в предложении с операцией на странице {page.number}"
                                       " и в условии о вступлении в силу")
     return _ok("dates_near")
+
+
+def _says(pattern: str, text: str) -> bool:
+    return any(not _NEGATED.search(text, 0, m.start()) for m in re.finditer(pattern, text, re.IGNORECASE))
+
+
+def check_operative_wording(op: OpType, page: Page, spans: list[Span]) -> CheckResult:
+    """Termination, partial suspension and restatement of a document change everything after them, so the
+    sentence quoted for one must carry it out, not merely allow it or make it conditional."""
+    patterns = _OPERATIVE.get(op)
+    if not patterns:
+        return _ok("operative")
+    source = normalize_text(page.text)
+    for a, b in spans:
+        sentence = source[slice(*sentence_around(source, a, b))]
+        if all(_says(p, sentence) for p in patterns) and not _PERMISSIVE.search(sentence):
+            return _ok("operative")
+    return _fail("not_operative", f"в цитируемом предложении нет действующей формулировки для «{op.value}»: "
+                                  "только возможность или условие")
 
 
 def check_format(value: str, kind: ValueKind) -> CheckResult:
