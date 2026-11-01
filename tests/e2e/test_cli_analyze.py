@@ -24,3 +24,10 @@ def test_cli_replay_reads_the_given_cache_file(tmp_path, monkeypatch, fixtures_p
                                    "--cache-file", str(cache), "--out", str(tmp_path / "runs")])
     assert res.exit_code == 2 and "replay" in res.output and "Traceback" not in res.output
     assert cache.exists()
+
+
+def test_cli_exits_2_with_a_hint_on_a_bad_date_or_model(tmp_path, fixtures_package):
+    for args, hint in ((["--as-of", "2026-13-01"], "ГГГГ-ММ-ДД"), (["--model", "qwen3:8b"], "ollama:<модель>")):
+        res = CliRunner().invoke(app, ["analyze", str(fixtures_package), "--out", str(tmp_path), *args])
+        assert res.exit_code == 2 and hint in res.output, (args, res.output, res.exception)
+

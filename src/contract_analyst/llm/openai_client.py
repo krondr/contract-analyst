@@ -94,12 +94,15 @@ class OpenAICompatClient:
         response = self._http.post("/chat/completions", json={"model": self.model, **body})
         if response.is_error:  # the server failed, not our code: the run records it and goes on
             raise ConnectionError(f"сервер модели ответил {response.status_code}: {response.text[:200]}")
-        data = response.json()
+        try:
+            data = response.json()
+            choice = data["choices"][0]
+        except (ValueError, LookupError, TypeError) as exc:  # e.g. a gateway's {"error": ...} with status 200
+            raise ConnectionError(f"сервер модели вернул ответ без choices: {response.text[:200]}") from exc
         usage = data.get("usage") or {}
         self.usage["calls"] += 1
         self.usage["input_tokens"] += usage.get("prompt_tokens", 0)
         self.usage["output_tokens"] += usage.get("completion_tokens", 0)
-        choice = data["choices"][0]
         self.usage["truncated"] += choice.get("finish_reason") == "length"
         return choice["message"]
 

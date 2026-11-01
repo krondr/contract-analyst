@@ -34,7 +34,11 @@ def analyze(data: Path,
 
     overrides = {k: v for k, v in {"llm_model": model, "llm_cache_mode": llm_cache, "agent_variant": variant}.items() if v}
     settings = load_settings(**overrides)
-    when = date.fromisoformat(as_of) if as_of else date.today()
+    try:
+        when = date.fromisoformat(as_of) if as_of else date.today()
+    except ValueError:
+        typer.echo(f"Дата --as-of должна быть в формате ГГГГ-ММ-ДД, например 2026-10-30; получено «{as_of}»")
+        raise typer.Exit(2) from None
     try:
         result = run_analysis(data, settings, when, settings.agent_variant, only_chain=chain, only_doc=doc, out_dir=out,
                               llm_cache=cache_file)

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from contract_analyst.config import Settings
 from contract_analyst.llm.cache import CachingClient
-from contract_analyst.llm.client import LLMClient
+from contract_analyst.llm.client import LLMClient, LLMUnavailable
 from contract_analyst.llm.ollama_client import OllamaClient
 from contract_analyst.llm.openai_client import OpenAICompatClient
 from contract_analyst.llm.scripted import ScriptedClient, load_script
@@ -29,4 +29,4 @@ def get_llm_client(settings: Settings, cache_db: Path) -> LLMClient:
         return CachingClient(inner, cache_db, settings.llm_cache_mode)
     if spec.startswith("scripted:"):
         return ScriptedClient(load_script(Path(spec.removeprefix("scripted:"))))
-    raise ValueError(f"unknown LLM spec: {spec!r} (expected ollama:<model>, openai:<model> or scripted:<file>)")
+    raise LLMUnavailable(f"Неизвестная модель «{spec}»: укажите ollama:<модель>, openai:<модель> или scripted:<файл>")

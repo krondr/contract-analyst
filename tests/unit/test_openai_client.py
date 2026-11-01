@@ -164,3 +164,11 @@ def test_structured_schema_is_closed_at_every_level_for_openai():
     assert len(found) >= 2 and all(o.get("additionalProperties") is False for o in found)
     by_name = fmt["schema"]["properties"]["by_name"]
     assert isinstance(by_name["additionalProperties"], dict)  # a map keeps the schema of its values
+
+
+@pytest.mark.parametrize("response", [httpx.Response(200, json={"error": {"message": "upstream provider failed"}}),
+                                      httpx.Response(200, text="<html>bad gateway</html>")])
+def test_ok_status_without_an_answer_is_a_transport_error(response):
+    with pytest.raises(ConnectionError, match="choices"):
+        client(lambda request: response).chat(M)
+
