@@ -353,6 +353,32 @@ def check_operative_wording(op: OpType, page: Page, spans: list[Span]) -> CheckR
                                   "только возможность или условие")
 
 
+_APPENDIX_NAMED = re.compile(r"приложени\w*\s*(?:№\s*)?(\d+)", re.IGNORECASE)
+_CLAUSE_NAMED = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3})*(?!\d)")
+
+
+def _named(text: str) -> tuple[set[str], set[str]]:
+    """Appendix and clause numbers a text names: «пункт 1.6 Приложения № 1» → {"1"}, {"1.6"}."""
+    text = _OCR_NUMBER_RE.sub(" ", text)
+    return {m[1] for m in _APPENDIX_NAMED.finditer(text)}, set(_CLAUSE_NAMED.findall(_APPENDIX_NAMED.sub(" ", text)))
+
+
+def check_target_named(target: str, page: Page, spans: list[Span], clause: str | None) -> CheckResult:
+    """The clause or appendix an operation changes must be named in its sentence or be the clause the sentence stands
+    in («Приложение 1/1.6»): the fold applies the change to the target, so the text has to back it."""
+    appendices, clauses = _named(target)
+    if not appendices and not clauses:
+        return _ok("target_unchecked")
+    source = normalize_text(page.text)
+    clause_appendices, clause_numbers = _named(clause or "")
+    for a, b in spans:
+        said_appendices, said_numbers = _named(source[slice(*sentence_around(source, a, b))])
+        if appendices <= said_appendices | clause_appendices and clauses <= said_numbers | clause_numbers:
+            return _ok("target_named")
+    return _fail("target_not_named", f"«{target}» не назван в предложении с операцией на странице {page.number} "
+                                     "и не совпадает с пунктом, в котором оно стоит")
+
+
 def check_format(value: str, kind: ValueKind) -> CheckResult:
     if kind == "doc_number":
         return _ok("format") if DOC_NUMBER_RE.fullmatch(value) else _fail("bad_format", f"номер {value} не по формату")

@@ -491,3 +491,25 @@ def test_add_clause_needs_a_verb_that_adds(text, accepted):
     r = gate_op(OpOut(op="add_clause", target="5.4", page=1, quote=quote), text_doc([text]), load_settings())
     assert (r.status == "accepted") is accepted, r.reason
     assert accepted or r.reason.startswith("not_operative")
+
+
+_REWRITE_3_1 = "1. Пункт 3.1 Договора изложить в следующей редакции: «3.1. Ставка составляет 700 рублей»."
+_REWRITE_1_6 = "1. Пункт 1.6 Приложения № 1 к Договору изложить в следующей редакции."
+
+
+@pytest.mark.parametrize(("op", "text", "quote", "target", "accepted"), [
+    ("replace_clause", _REWRITE_3_1, "Пункт 3.1 Договора изложить в следующей редакции", "9.4", False),
+    ("replace_clause", _REWRITE_3_1, "Пункт 3.1 Договора изложить в следующей редакции", "3.1", True),
+    ("replace_clause", _REWRITE_1_6, "Пункт 1.6 Приложения № 1 к Договору изложить в следующей редакции",
+     "Приложение 2/1.6", False),
+    ("replace_clause", _REWRITE_1_6, "Пункт 1.6 Приложения № 1 к Договору изложить в следующей редакции",
+     "Приложение 1/1.6", True),
+    # Only the clause the sentence stands in names the target: a clause heading in that appendix.
+    ("replace_clause", "Приложение № 1\n1.6. Вознаграждение Агента пересматривается. Изложить пункт в следующей редакции.",
+     "Изложить пункт в следующей редакции", "Приложение 1/1.6", True),
+    ("replace_appendix", "1. Приложение № 7 к Договору изложить в редакции Приложения № 1 к настоящему Соглашению.",
+     "Приложение № 7 к Договору изложить в редакции Приложения № 1 к настоящему Соглашению", "Приложение 7", True)])
+def test_clause_operation_target_must_be_named_by_its_sentence_or_clause(op, text, quote, target, accepted):
+    r = gate_op(OpOut(op=op, target=target, page=1, quote=quote), text_doc([text]), load_settings())
+    assert (r.status == "accepted") is accepted, r.reason
+    assert accepted or r.reason.startswith("target_not_named")

@@ -24,6 +24,7 @@ from contract_analyst.gate.checks import (
     check_operative_wording,
     check_parent_role,
     check_period_near,
+    check_target_named,
     check_value_in_quote,
     check_value_on_page,
     locate_quote,
@@ -279,6 +280,8 @@ def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
         if op.op in _NEEDS_TARGET and not (op.target or "").strip():
             yield CheckResult(ok=False, code="no_target",
                               reason="не указано, какой пункт, раздел или приложение меняет операция")
+        if op.op in _NEEDS_TARGET:
+            yield check_target_named(op.target, page, spans, base["source"].clause_id)
         yield check_ocr_confidence(op.quote, page, threshold)
         if op.op == OpType.INVALIDATE_DOCUMENT:
             yield check_value_in_quote(op.target or "", op.quote, "doc_number")
