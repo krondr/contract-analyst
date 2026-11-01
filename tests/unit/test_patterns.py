@@ -4,9 +4,12 @@ from decimal import Decimal
 import pytest
 
 from contract_analyst.parsing.patterns import (
+    date_spans,
+    doc_number_spans,
     find_dates,
     find_doc_numbers,
     find_numbers,
+    number_readings,
     parse_money,
     parse_ru_date,
 )
@@ -45,6 +48,34 @@ def test_find_numbers_keeps_both_readings_of_space_separated_table_cells():
     assert Decimal(270) in found and Decimal(500) in found and Decimal(270500) in found
     assert find_numbers("Пакет Мини 675 1000") == [Decimal(675), Decimal(1000)]
     assert parse_money("1 500 рублей") == Decimal(1500)
+
+
+@pytest.mark.parametrize("prose", [
+    "Вознаграждение составляет 1 500 рублей за абонента.", "в размере 1 500\nрублей за абонента",
+    "1 500 (одна тысяча пятьсот) рублей", "Ставка составляет 1 500.\nНастоящее соглашение"])
+def test_grouped_number_in_prose_is_one_amount(prose):
+    assert find_numbers(prose) == [Decimal(1500)]
+
+
+def test_table_row_cells_on_one_line_are_ambiguous_readings():
+    text = "Тариф Старт 270 500\nОптима 330,5 500"
+    readings = number_readings(text)
+    assert [(r.value, r.ambiguous) for r in readings] == [
+        (Decimal(270500), True), (Decimal(270), True), (Decimal(500), True),
+        (Decimal("330.5"), False), (Decimal(500), False)]
+    assert [text[r.start:r.end] for r in readings] == ["270 500", "270", "500", "330,5", "500"]
+
+
+def test_explicit_cell_separator_keeps_grouped_numbers_whole():
+    assert find_numbers("Безлимит | 1 200 | 1 500") == [Decimal(1200), Decimal(1500)]
+    assert not any(r.ambiguous for r in number_readings("Безлимит | 1 200 | 1 500"))
+
+
+def test_spans_point_into_the_text():
+    text = "Соглашение № D990000003-01 от «21» января 2021 г. и от 01.02.2021, ставка 700 рублей"
+    assert [(n, text[a:b]) for n, a, b in doc_number_spans(text)] == [("D990000003-01", "D990000003-01")]
+    assert [(d, text[a:b]) for d, a, b in date_spans(text)] == [
+        (date(2021, 1, 21), "«21» января 2021"), (date(2021, 2, 1), "01.02.2021")]
 
 
 def test_ocr_misread_leading_d_is_normalized():
