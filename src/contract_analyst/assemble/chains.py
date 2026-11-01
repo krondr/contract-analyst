@@ -100,6 +100,22 @@ def _root_number(number: str, parent_of: dict[str, str]) -> str:
     return number
 
 
+def _main_date_checked(main: DocumentRecord | None, sups: list[DocumentRecord], issues: list[Issue]) -> Extracted[date] | None:
+    """The contract's date, plus a flag for every supplement dated before it: a supplement cannot precede its contract,
+    so either a date or the link is wrong."""
+    main_date = _main_date(main, sups, issues)
+    if main_date is None or main_date.value is None:
+        return main_date
+    for r in sups:
+        when = _value(r.effective_from) or _value(r.doc_date)
+        if when is not None and when < main_date.value:
+            issues.append(Issue(code="supplement_before_main",
+                                message=f"{_value(r.number) or r.file_name} датировано {when}, раньше договора "
+                                        f"({main_date.value}): неверна дата или связь с договором",
+                                sources=[s for s in [r.effective_from.source or r.doc_date.source] if s]))
+    return main_date
+
+
 def build_chains(records: list[DocumentRecord]) -> list[ContractChain]:
     by_number: dict[str, DocumentRecord] = {}
     for r in records:
@@ -176,7 +192,7 @@ def build_chains(records: list[DocumentRecord]) -> list[ContractChain]:
         for r in chain_records:
             issues.extend(r.issues)
         chains.append(ContractChain(contract_number=key, main_doc_id=main.doc_id if main else None,
-                                    main_date=_main_date(main, sups, issues), docs=docs, issues=issues))
+                                    main_date=_main_date_checked(main, sups, issues), docs=docs, issues=issues))
 
     for r in loose:
         chains.append(ContractChain(contract_number=_value(r.number) or r.doc_id, main_doc_id=None, docs=[

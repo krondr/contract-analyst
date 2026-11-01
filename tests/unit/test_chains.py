@@ -115,3 +115,11 @@ def test_same_effective_date_orders_by_signing_date_before_number():
     b = rec("b", "D990000009-01", parent=MAIN, doc_date=date(2024, 2, 1), effective=date(2024, 4, 1))
     (chain,) = build_chains([rec("m", MAIN, kind="main", doc_date=date(2021, 1, 21)), a, b])
     assert [d.doc_id for d in chain.docs] == ["m", "b", "a"]
+
+
+def test_supplement_dated_before_its_contract_is_flagged():
+    (chain,) = build_chains([rec("m", MAIN, kind="main", doc_date=date(2022, 5, 10)),
+                             rec("s", "D990000002-01", parent=MAIN, doc_date=date(2021, 3, 1)),
+                             rec("t", "D990000003-01", parent=MAIN, effective=date(2023, 1, 1))])
+    flagged = [i for i in chain.issues if i.code == "supplement_before_main"]
+    assert len(flagged) == 1 and "D990000002-01" in flagged[0].message
