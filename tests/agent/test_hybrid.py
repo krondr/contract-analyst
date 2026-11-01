@@ -56,6 +56,19 @@ def test_hybrid_produces_report_and_thought_for_every_call(tmp_path, fixtures_pa
     assert metrics["variant"] == "B" and metrics["safety_net"] == []
 
 
+def test_recorded_run_replays_without_misses(tmp_path, fixtures_package):
+    from contract_analyst.llm.cache import CachingClient
+
+    db = tmp_path / "cache.sqlite"
+    recorder = CachingClient(ScriptedClient(load_script(SCRIPTS / "happy_path.json")), db, "record")
+    first = run_analysis(fixtures_package, load_settings(), date(2026, 10, 30), client=recorder,
+                         ocr_engine=FakeOcrEngine(), out_dir=tmp_path / "runs", read_cache=None, console=False)
+    replay = CachingClient(ScriptedClient([]), db, "replay")
+    second = run_analysis(fixtures_package, load_settings(), date(2026, 10, 30), client=replay,
+                          ocr_engine=FakeOcrEngine(), out_dir=tmp_path / "runs", read_cache=None, console=False)
+    assert second.run_dir != first.run_dir and replay.hits == recorder.inner.usage["calls"] == 9
+
+
 def test_low_quality_scan_triggers_rerecognize_and_refusal_is_reported(tmp_path, fixtures_package):
     script = [{"items": ["Перераспознать скан"]}, chat(("rerecognize", {"doc_id": "ДС2 скан.pdf", "pages": [1],
                                                                          "strategy": "higher_dpi"})),

@@ -291,4 +291,6 @@ def write_report(ctx: RunContext) -> ToolResult:
     ctx.removed_claims = removed
     KnowledgeBase(ctx.run_dir / "kb").save(documents=ctx.documents, records=ctx.records, chains=ctx.chains,
                                            consolidated=ctx.consolidated, clusters=ctx.clusters, decisions=ctx.decisions)
-    return ToolResult(status="ok", data={"report": str(ctx.report_path), "removed_claims": removed})
+    # Run-independent: the result goes back to the model, and a timestamped path would change the next turn's
+    # cache key, so a recorded run could never be replayed.
+    return ToolResult(status="ok", data={"report": ctx.report_path.name, "removed_claims": removed})
