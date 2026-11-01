@@ -38,3 +38,14 @@ class TraceLogger:
 
 def read_trace(path: Path) -> list[dict]:
     return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def thought_counts(events: list[dict]) -> tuple[int, int]:
+    """(tool calls with a thought from the argument, the message text or the thinking; all tool calls)."""
+    sources = [e.get("thought_source") for e in events if e.get("event") == "thought"]
+    return sum(s != "missing" for s in sources), len(sources)
+
+
+def thought_coverage(events: list[dict]) -> float | None:
+    found, total = thought_counts(events)
+    return round(found / total, 3) if total else None

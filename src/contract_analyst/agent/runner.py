@@ -12,7 +12,7 @@ from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel
 
 from contract_analyst.agent.context import RunContext
-from contract_analyst.agent.trace import TraceLogger
+from contract_analyst.agent.trace import TraceLogger, read_trace, thought_coverage
 from contract_analyst.config import Settings
 from contract_analyst.ingest.inventory import input_paths, path_key
 from contract_analyst.llm.client import LLMClient
@@ -125,7 +125,8 @@ def run_analysis(input_dir: Path, settings: Settings, as_of: date, variant: Lite
                "model": client.model_name, "ocr": f"{ocr_engine.name}/{settings.ocr_preprocess}",
                "prompt_versions": prompt_versions(), "llm_usage": dict(client.usage),
                "cache_hits": getattr(client, "hits", 0), "documents": len(ctx.documents),
-               "unprocessed": len(ctx.unprocessed), "removed_claims": ctx.removed_claims, "safety_net": ctx.safety_net}
+               "unprocessed": len(ctx.unprocessed), "removed_claims": ctx.removed_claims, "safety_net": ctx.safety_net,
+               "thought_coverage": thought_coverage(read_trace(trace.path))}
     (run_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=1), encoding="utf-8")
     return RunResult(run_dir=run_dir, report_path=ctx.report_path, kb_dir=run_dir / "kb", trace_path=trace.path,
                      variant=variant, seconds=seconds, llm_usage=dict(client.usage))

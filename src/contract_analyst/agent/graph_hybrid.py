@@ -11,6 +11,7 @@ from contract_analyst.agent.context import RunContext
 from contract_analyst.agent.guards import Guard
 from contract_analyst.agent.state import AgentState, PlanOut, ReflectionOut
 from contract_analyst.agent.tools import dispatch, tool_schemas
+from contract_analyst.agent.trace import read_trace, thought_counts
 from contract_analyst.llm.client import ToolCall
 from contract_analyst.llm.ollama_client import TRANSPORT_ERRORS
 from contract_analyst.llm.prompts import load_prompt
@@ -170,9 +171,12 @@ def report(ctx: RunContext) -> None:
     """Reporter: code finishes what the agent left undone, then the report is written and checked. The runner also
     calls it when the graph is cut off, so every run ends in a report."""
     complete_with_code(ctx)
-    ctx.reflection = reflect_checklist(ctx) + [ReflectionItem(
-        item="Шаги, выполненные кодом за агента", ok=not ctx.safety_net,
-        note=", ".join(ctx.safety_net) or "нет — агент выполнил план сам")]
+    found, total = thought_counts(read_trace(ctx.trace.path))
+    ctx.reflection = reflect_checklist(ctx) + [
+        ReflectionItem(item="Шаги, выполненные кодом за агента", ok=not ctx.safety_net,
+                       note=", ".join(ctx.safety_net) or "нет — агент выполнил план сам"),
+        ReflectionItem(item="Мысль записана у каждого вызова инструмента", ok=found == total,
+                       note=f"{found} из {total}" if total else "вызовов инструментов не было")]
     steps.write_report(ctx)
     text = ctx.report_path.read_text(encoding="utf-8")
     missing = [h for h in REQUIRED_HEADINGS if h not in text]

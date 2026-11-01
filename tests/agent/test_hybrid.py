@@ -54,7 +54,8 @@ def test_hybrid_produces_report_and_thought_for_every_call(tmp_path, fixtures_pa
     assert len(calls) == 7 and all(e["thought"] for e in calls)
     assert [e["event"] for e in trace].count("plan") == 1
     metrics = json.loads((r.run_dir / "metrics.json").read_text())
-    assert metrics["variant"] == "B" and metrics["safety_net"] == []
+    assert metrics["variant"] == "B" and metrics["safety_net"] == [] and metrics["thought_coverage"] == 1.0
+    assert "| Мысль записана у каждого вызова инструмента | ✅ | 7 из 7 |" in report
 
 
 def test_recorded_run_replays_without_misses(tmp_path, fixtures_package):
@@ -151,3 +152,13 @@ def test_executor_thinks_and_its_reasoning_becomes_the_thought(tmp_path, fixture
     assert any(e["event"] == "llm_call" and e.get("reasoning") == "Сначала соберу цепочки." for e in trace)
     call = next(e for e in trace if e["event"] == "tool_call")
     assert call["thought"] == "Сначала соберу цепочки." and call["thought_source"] == "reasoning"
+
+
+def test_calls_without_any_thought_lower_the_coverage(tmp_path, fixtures_package):
+    silent = AssistantTurn(tool_calls=[ToolCall(id="0", name="build_chains", args={})])
+    reflect = '{"goal_met": true, "gaps": []}'
+    script = ['{"items": ["План"]}', silent, chat(("consolidate", {})), chat(content="Готово"), reflect,
+              chat(content="Готово"), reflect, '{"summary": "Аренда."}']
+    r = run(fixtures_package, script, tmp_path, settings=load_settings(agent_thinking=False))
+    assert json.loads((r.run_dir / "metrics.json").read_text())["thought_coverage"] == 0.5
+    assert "| Мысль записана у каждого вызова инструмента | ❌ | 1 из 2 |" in r.report_path.read_text(encoding="utf-8")
