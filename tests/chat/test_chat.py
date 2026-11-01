@@ -152,3 +152,19 @@ def test_answerable_question_without_facts_is_not_scored(tmp_path):
 - {id: q2, question: "Какая ставка?", expected_facts: ["500"], unanswerable: false, follow_up_of: null}
 """, ["Есть договор [doc:m:p1].", "Ставка 700 рублей [doc:m:p1]."])
     assert scores.accuracy == 0.0 and scores.invalid == ["q1"]
+
+
+def test_llm_outage_during_a_question_is_an_answer_not_a_crash(tmp_path):
+    from contract_analyst.chat.graph import ChatSession
+    from contract_analyst.config import load_settings
+    from contract_analyst.kb.store import KnowledgeBase
+
+    class Down:
+        model_name, usage = "down", {"calls": 0}
+
+        def chat(self, messages, tools=None, think=False):
+            raise ConnectionError("connection refused")
+
+    session = ChatSession(KnowledgeBase(tmp_path / "kb"), Down(), load_settings(), tmp_path / "memory.sqlite")
+    answer = session.ask("Какая ставка действует?", "t1")
+    assert "ollama serve" in answer

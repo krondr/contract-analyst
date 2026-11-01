@@ -221,3 +221,14 @@ def test_values_the_fold_did_not_accept_score_nothing(tmp_path):
     assert score_run(run, gs).consolidation_acc == 1 / 3  # only the status is right
     traps = {t.trap_id: t.passed for t in check_traps(run, gs)}
     assert traps["T5"] and not traps["T9"] and not traps["T7"]
+
+
+def test_truncated_answers_lower_the_json_validity_rate(tmp_path):
+    from contract_analyst.models import Issue
+
+    def truncated(records):
+        records["s"].issues.append(Issue(code="llm_truncated", message="s.pdf: группа money — ответ обрезан"))
+
+    run = make_run(tmp_path, tweak=truncated)
+    (run / "metrics.json").write_text('{"llm_usage": {"calls": 4}}', encoding="utf-8")
+    assert score_run(run, golden()).json_valid_rate == 0.75

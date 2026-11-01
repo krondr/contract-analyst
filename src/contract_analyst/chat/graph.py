@@ -73,6 +73,11 @@ class ChatSession:
         return graph.compile(checkpointer=self._saver)
 
     def ask(self, question: str, thread: str) -> str:
-        state = self.graph.invoke({"messages": [{"role": "user", "content": question}], "rounds": 0},
-                                  config={"configurable": {"thread_id": thread}, "recursion_limit": 40})
+        from contract_analyst.llm.ollama_client import TRANSPORT_ERRORS
+
+        try:
+            state = self.graph.invoke({"messages": [{"role": "user", "content": question}], "rounds": 0},
+                                      config={"configurable": {"thread_id": thread}, "recursion_limit": 40})
+        except TRANSPORT_ERRORS as exc:
+            return f"Модель недоступна ({exc}): запустите `ollama serve` и задайте вопрос ещё раз."
         return state["messages"][-1]["content"]

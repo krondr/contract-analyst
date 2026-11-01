@@ -315,7 +315,7 @@ def score_run(run_dir: Path, golden: GoldenSet, runs_at: dict[date, Path] | None
     traps = check_traps(Path(run_dir), golden, runs_at)
     usage = _usage(Path(run_dir))
     llm = usage.get("llm_usage", {})
-    invalid = sum(1 for r in records.values() for i in r.issues if i.code == "llm_invalid_json")
+    invalid = sum(1 for r in records.values() for i in r.issues if i.code in ("llm_invalid_json", "llm_truncated"))
     return Scores(
         doc_kind_acc=sum(kinds) / len(kinds) if kinds else 1.0,
         chain_acc=sum(chain_ok) / len(chain_ok) if chain_ok else 1.0,
