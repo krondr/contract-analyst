@@ -15,6 +15,7 @@ class OcrResult(BaseModel):
     words: list[OcrWord]
     mean_conf: float
     rotation: int = 0  # degrees counter-clockwise applied before recognition
+    tall_box_share: float | None = None  # share of detected text boxes taller than wide; None: engine gives no boxes
 
 
 class OcrEngine(Protocol):

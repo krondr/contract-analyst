@@ -186,3 +186,35 @@ def eval_chat(kb: Path, questions: Path = Path("data/golden/chat_questions.yaml"
         scores = chat_eval(kb, questions, get_llm_client(settings, Path("data/cache/llm.sqlite")), settings,
                            Path(tmp) / "memory.sqlite")
     typer.echo(scores.model_dump_json(indent=1))
+
+
+# --- E1: OCR benchmark -------------------------------------------------------------------------------------------
+
+
+@app.command("bench-ocr")
+def bench_ocr(
+    data: Path,
+    out: Annotated[Path, typer.Option(help="Куда записать результаты")] = Path("docs/experiments/e1_ocr.md"),
+    golden: Annotated[Path | None, typer.Option(
+        help="Эталон с расшифровками сканов; по умолчанию <data>/../golden/golden.yaml")] = None,
+    pages: Annotated[int, typer.Option(help="Сколько синтетических сканов собрать")] = 40,
+    seed: Annotated[int, typer.Option(help="Seed выбора страниц и искажений")] = 0,
+    engines: Annotated[str, typer.Option(help="Движки через запятую")] = "tesseract,rapidocr",
+    modes: Annotated[str, typer.Option(help="Варианты предобработки через запятую")] = "none,deskew_sauvola",
+    note: Annotated[str, typer.Option(help="Причина прогона; попадёт в документ")] = "",
+) -> None:
+    """E1: замер OCR-движков и предобработки на синтетических сканах и расшифровках из эталона (только метрики)."""
+    from contract_analyst.eval.ocr_bench import run_benchmark
+
+    rows, winner = run_benchmark(data, out, golden=golden, n_pages=pages, seed=seed,
+                                 engines=[e for e in engines.split(",") if e],
+                                 modes=[m for m in modes.split(",") if m], note=note,
+                                 log=lambda message: typer.echo(message, err=True))
+    for r in rows:
+        threshold = "—" if r.threshold is None else f"{r.threshold:.2f}"
+        typer.echo(f"{r.engine} + {r.mode}: CER {r.cer:.4f}, покрытие при точности ≥ 0.99 "
+                   f"{r.crit_coverage_at_p99:.3f} (t = {threshold}), {r.sec_per_page:.2f} с/стр")
+    rec = winner.recommended_threshold
+    typer.echo(f"победитель: {winner.engine} + {winner.mode}; "
+               f"ocr_word_conf_threshold: {'—' if rec is None else f'{rec:.2f}'}")
+    typer.echo(f"записано: {out}")
