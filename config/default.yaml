@@ -2,6 +2,11 @@
 llm_model: "ollama:qwen3:8b"          # E2
 ollama_url: "http://localhost:11434"   # overridden by CA_OLLAMA_URL; a non-loopback host needs CA_ALLOW_REMOTE_LLM=1
 openai_base_url: "http://localhost:8000/v1"  # for llm_model openai:<model> (vLLM, LM Studio, ...); CA_OPENAI_BASE_URL, key in CA_OPENAI_API_KEY
+# Server-specific request fields for openai:<model>: switch a reasoning model's thinking off for extraction and on
+# for the agent. Measured: Ollama /v1 obeys reasoning_effort none (ignores think and chat_template_kwargs);
+# vLLM / SGLang with Qwen3: {chat_template_kwargs: {enable_thinking: false}} and ... true for thinking turns.
+openai_extra_body: {}
+openai_think_extra_body: {}
 llm_num_ctx: 16384
 llm_batch_tokens: 6000
 # Output caps. Ollama's own default is unlimited with context shifting, so a degenerate answer streams forever.

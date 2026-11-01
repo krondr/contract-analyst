@@ -112,3 +112,24 @@ def test_factory_builds_a_cached_openai_client(tmp_path, monkeypatch):
     client_ = get_llm_client(load_settings(llm_model="openai:qwen3-8b"), tmp_path / "c.sqlite")
     assert isinstance(client_, CachingClient)
     assert client_.inner.base_url == "http://127.0.0.1:9000/v1" and client_.model_name == "openai:qwen3-8b"
+
+
+def test_server_specific_fields_switch_thinking_per_call():
+    bodies = []
+    c = client(lambda r: bodies.append(json.loads(r.content)) or answer({"content": "{}"}),
+               extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+               think_extra_body={"chat_template_kwargs": {"enable_thinking": True}})
+    c.structured(M, Out)
+    c.chat(M)
+    c.chat(M, think=True)
+    assert [b["chat_template_kwargs"]["enable_thinking"] for b in bodies] == [False, False, True]
+
+
+def test_factory_passes_the_server_fields_from_settings(tmp_path):
+    from contract_analyst.config import load_settings
+    from contract_analyst.llm.factory import get_llm_client
+
+    settings = load_settings(llm_model="openai:m", openai_extra_body={"think": False},
+                             openai_think_extra_body={"think": True})
+    inner = get_llm_client(settings, tmp_path / "c.sqlite").inner
+    assert (inner.extra_body, inner.think_extra_body) == ({"think": False}, {"think": True})

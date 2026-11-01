@@ -23,7 +23,9 @@ def get_llm_client(settings: Settings, cache_db: Path) -> LLMClient:
     if spec.startswith("openai:"):
         inner = OpenAICompatClient(spec.removeprefix("openai:"), settings.openai_base_url,
                                    os.environ.get("CA_OPENAI_API_KEY"), max_tokens=settings.llm_max_tokens,
-                                   think_max_tokens=settings.llm_think_max_tokens, deadline=settings.llm_call_deadline)
+                                   think_max_tokens=settings.llm_think_max_tokens, deadline=settings.llm_call_deadline,
+                                   extra_body=settings.openai_extra_body,
+                                   think_extra_body=settings.openai_think_extra_body)
         return CachingClient(inner, cache_db, settings.llm_cache_mode)
     if spec.startswith("scripted:"):
         return ScriptedClient(load_script(Path(spec.removeprefix("scripted:"))))

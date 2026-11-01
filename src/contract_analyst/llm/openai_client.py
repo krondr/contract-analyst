@@ -47,6 +47,7 @@ def _args(raw: str | dict | None) -> dict:
 class OpenAICompatClient:
     def __init__(self, model: str, base_url: str = "http://localhost:8000/v1", api_key: str | None = None,
                  max_tokens: int = 4096, think_max_tokens: int = 4096, deadline: float = 900.0,
+                 extra_body: dict | None = None, think_extra_body: dict | None = None,
                  transport: httpx.BaseTransport | None = None):
         if not is_loopback(base_url) and os.environ.get("CA_ALLOW_REMOTE_LLM") != "1":
             raise LLMUnavailable(f"Модель по адресу {base_url} — не на этой машине: тексты документов ушли бы на "
@@ -54,6 +55,8 @@ class OpenAICompatClient:
         self.model, self.base_url = model, base_url.rstrip("/")
         self.model_name = f"openai:{model}"  # also the cache key: never shared with an Ollama model of that name
         self.max_tokens, self.think_max_tokens = max_tokens, think_max_tokens
+        # Server-specific fields, e.g. switching a reasoning model's thinking off for extraction and on for the agent.
+        self.extra_body, self.think_extra_body = extra_body or {}, think_extra_body or {}
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         # A non-streamed answer arrives whole, so the read timeout is the per-call deadline.
         self._http = httpx.Client(base_url=self.base_url, headers=headers, timeout=deadline, transport=transport)
@@ -89,7 +92,7 @@ class OpenAICompatClient:
 
     def chat(self, messages: list[Message], tools: list[dict] | None = None, think: bool = False) -> AssistantTurn:
         body = {"messages": _to_openai(messages), "max_tokens": self.think_max_tokens if think else self.max_tokens,
-                **(THINKING if think else GREEDY)}
+                **(THINKING if think else GREEDY), **(self.think_extra_body if think else self.extra_body)}
         if tools:
             body["tools"] = tools
         message = self._complete(body)
@@ -100,6 +103,7 @@ class OpenAICompatClient:
 
     def structured(self, messages: list[Message], schema: type[BaseModel]) -> str:
         message = self._complete({"messages": _to_openai(messages), "max_tokens": self.max_tokens, **GREEDY,
+                                  **self.extra_body,
                                   "response_format": {"type": "json_schema", "json_schema": {
                                       "name": schema.__name__, "schema": schema.model_json_schema()}}})
         return message.get("content") or ""

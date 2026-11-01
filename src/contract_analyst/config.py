@@ -30,6 +30,8 @@ class Settings(BaseModel):
     llm_model: str = "ollama:qwen3:8b"
     ollama_url: str = "http://localhost:11434"
     openai_base_url: str = "http://localhost:8000/v1"  # for openai:<model>
+    openai_extra_body: dict = {}  # server-specific request fields for extraction calls
+    openai_think_extra_body: dict = {}  # ... and for the agent's thinking turns
     llm_num_ctx: int = 16384
     llm_batch_tokens: int = 6000
     llm_max_tokens: int = 4096
