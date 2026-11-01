@@ -148,3 +148,13 @@ def test_cli_golden_diff_writes_json(tmp_path):
     res = CliRunner().invoke(app, ["golden", "diff", str(tmp_path / "a.yaml"), str(tmp_path / "b.yaml"),
                                    "--out", str(tmp_path / "d.json")])
     assert res.exit_code == 0 and json.loads((tmp_path / "d.json").read_text())[0]["path"] == "documents[d1].city"
+
+
+def test_diff_flags_vat_and_ignores_how_a_clause_is_spelled():
+    from contract_analyst.eval.golden import GoldenOp
+
+    def gs(vat, target):
+        rates = [GoldenRate(label="Ставка", amount=Decimal(500), vat=vat, page=1, quote="Ставка 500 рублей")]
+        return _gs(documents=[_gdoc(rates=rates, ops=[GoldenOp(op="replace_clause", target=target)])])
+
+    assert [d.path for d in diff_golden(gs("excluded", "п. 3.1"), gs("included", "пункт 3.1"))] == ["documents[d1].rates"]

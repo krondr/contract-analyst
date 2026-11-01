@@ -72,7 +72,8 @@ import random as _random
 
 from pydantic import BaseModel as _BaseModel
 
-from contract_analyst.eval.golden import GoldenRate
+from contract_analyst.eval.metrics import _rate_set as _rate_key  # one rate key for scoring, diff and check
+from contract_analyst.eval.metrics import normalize_target
 from contract_analyst.eval.metrics import similar_text as _similar
 from contract_analyst.eval.text_metrics import cer
 
@@ -83,10 +84,6 @@ class GoldenDiff(_BaseModel):
     path: str
     a: str | None
     b: str | None
-
-
-def _rate_key(rates: list[GoldenRate]) -> set[tuple]:
-    return {(r.amount.normalize(), r.valid_from, r.valid_to) for r in rates}
 
 
 def _value_str(v: GoldenValue) -> str:
@@ -118,8 +115,8 @@ def diff_golden(a: GoldenSet, b: GoldenSet) -> list[GoldenDiff]:
                 add(f"documents[{doc_id}].terms.{key}", ta and ta.value, tb and tb.value)
         if _rate_key(da.rates) != _rate_key(db.rates):
             add(f"documents[{doc_id}].rates", sorted(map(str, _rate_key(da.rates))), sorted(map(str, _rate_key(db.rates))))
-        ops_a = {(o.op, (o.target or "").replace(" ", ""), o.effective_from) for o in da.ops}
-        ops_b = {(o.op, (o.target or "").replace(" ", ""), o.effective_from) for o in db.ops}
+        ops_a = {(o.op, normalize_target(o.target), o.effective_from) for o in da.ops}
+        ops_b = {(o.op, normalize_target(o.target), o.effective_from) for o in db.ops}
         if ops_a != ops_b:
             add(f"documents[{doc_id}].ops", sorted(map(str, ops_a)), sorted(map(str, ops_b)))
 
@@ -257,7 +254,7 @@ def check_golden(gs: GoldenSet, docs: dict[str, DocumentText], required_traps: s
 
 
 def _rates_text(rates) -> str:
-    return "[" + "; ".join(sorted(f"{r.amount.normalize():f} {r.valid_from or '…'}–{r.valid_to or '…'}"
+    return "[" + "; ".join(sorted(f"{r.amount.normalize():f} {r.vat} {r.valid_from or '…'}–{r.valid_to or '…'}"
                                   for r in rates)) + "]"
 
 

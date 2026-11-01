@@ -15,7 +15,7 @@ from contract_analyst.eval.golden import (
     GoldenTrap,
     GoldenValue,
 )
-from contract_analyst.eval.metrics import same_value, score_run, similar_text
+from contract_analyst.eval.metrics import normalize_target, same_value, score_run, similar_text
 from contract_analyst.eval.traps import check_traps
 from contract_analyst.kb.store import KnowledgeBase
 from contract_analyst.models import OpType
@@ -26,11 +26,13 @@ MAIN, SUP = "D990000001-01", "D990000002-01"
 AS_OF = date(2026, 10, 30)
 
 
-def make_run(tmp_path, main_number=MAIN):
+def make_run(tmp_path, main_number=MAIN, tweak=None):
     records = {"m": rec("m", main_number, kind="main", doc_date=date(2021, 1, 21), category="lease"),
                "s": rec("s", SUP, parent=MAIN, effective=date(2026, 7, 1),
                         rates=[("Ставка", 675, date(2026, 7, 1), date(2026, 12, 31)), ("Ставка", 1200, date(2027, 1, 1), None)],
                         ops=[(OpType.SUSPEND_PART, None, date(2026, 8, 1))])}
+    if tweak:
+        tweak(records)
     chains = build_chains(list(records.values()))
     consolidated = {c.contract_number: consolidate(c, records, AS_OF) for c in chains}
     from contract_analyst.analyze.cluster import cluster_contracts
@@ -125,3 +127,43 @@ def test_similar_text_tells_different_terms_apart(gold, got):
         "clause_number", "reworded"])
 def test_similar_text_tolerates_paraphrase(gold, got):
     assert similar_text(gold, got)
+
+
+def _set(attr, value, i=0, field="ops"):
+    def tweak(records):
+        setattr(getattr(records["s"], field)[i], attr, value)
+    return tweak
+
+
+def test_op_with_wrong_date_or_target_is_wrong(tmp_path):
+    assert score_run(make_run(tmp_path / "ok"), golden()).critical_accepted_wrong == 0
+    late = score_run(make_run(tmp_path / "date", tweak=_set("effective_from", date(2026, 9, 1))), golden())
+    elsewhere = score_run(make_run(tmp_path / "target", tweak=_set("target", "п. 4.2")), golden())
+    assert late.critical_accepted_wrong == elsewhere.critical_accepted_wrong == 1
+
+
+def test_op_date_defaults_to_the_document_date_on_both_sides(tmp_path):
+    gs = golden()
+    gs.documents[1].ops[0].effective_from = None
+    run = make_run(tmp_path, tweak=_set("effective_from", date(2026, 7, 1)))
+    assert score_run(run, gs).critical_accepted_wrong == 0
+
+
+def test_rate_with_wrong_vat_is_wrong(tmp_path):
+    s = score_run(make_run(tmp_path, tweak=_set("vat", "included", field="rates")), golden())
+    assert s.critical_accepted_wrong == 1
+
+
+@pytest.mark.parametrize("a, b", [
+    ("п. 12.2", "пункт 12.2"), ("12.2", "Пункт 12.2. Договора"), ("подпункт 1.1.1", "пп. 1.1.1"),
+    ("Приложение № 1, п. 1.6", "п. 1.6 Приложения 1"), ("Приложение 7", "приложение №7"), ("1-8", "разделы 1–8"),
+    ("D990000003-01", "Дополнительное соглашение № D990000003-01 от «02» февраля 2026 г."), (None, "весь договор"),
+])
+def test_clause_references_normalize_to_one_form(a, b):
+    assert normalize_target(a) == normalize_target(b)
+
+
+@pytest.mark.parametrize("a, b", [("п. 12.2", "п. 12.3"), ("Приложение № 1, п. 1.6", "Приложение № 2, п. 1.6"),
+                                  ("D990000003-01", "D990000004-01"), ("п. 3.1", None)])
+def test_different_clause_references_stay_different(a, b):
+    assert normalize_target(a) != normalize_target(b)

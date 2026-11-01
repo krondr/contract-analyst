@@ -42,6 +42,8 @@ _RIVALS = (
      "поставщик", "дилер", "агент", "принципал", "лицензиар", "лицензиат", "компания"},
 )
 _MIN_WORD_COVERAGE = 0.6
+_APPENDIX = re.compile(r"прил\w*\.?\s*(?:№\s*)?(\d+)")
+_CLAUSE_REF = re.compile(r"\d+(?:\.\d+)*(?:\s*[-–—]\s*\d+(?:\.\d+)*)?")
 
 
 class Scores(BaseModel):
@@ -147,12 +149,38 @@ def _accepted(ext: Extracted):
 
 
 def _rate_set(rates) -> set[tuple]:
-    return {(Decimal(r.amount).normalize(), r.valid_from, r.valid_to) for r in rates}
+    return {(Decimal(r.amount).normalize(), r.vat, r.valid_from, r.valid_to) for r in rates}
 
 
-def _op_key(op, target) -> tuple:
-    m = DOC_NUMBER_RE.search(target or "")
-    return (str(op), m.group(0) if m else None)
+def normalize_target(target: str | None) -> str | None:
+    """One spelling of what an operation changes: «п. 12.2», «пункт 12.2» and «12.2» are «12.2»; «Приложение № 1,
+    п. 1.6» and «п. 1.6 Приложения 1» are «приложение 1 1.6»; a document is its number; text without a reference
+    (for example «весь договор») is None."""
+    if not target:
+        return None
+    t = normalize_text(target)
+    docs = sorted(set(DOC_NUMBER_RE.findall(t)))
+    t = DOC_NUMBER_RE.sub(" ", t).casefold()
+    for _, span in find_dates(t):
+        t = t.replace(span, " ", 1)
+    appendices = sorted(f"приложение {n}" for n in _APPENDIX.findall(t))
+    refs = sorted(re.sub(r"\s*[-–—]\s*", "-", r) for r in _CLAUSE_REF.findall(_APPENDIX.sub(" ", t)))
+    return " ".join([*docs, *appendices, *refs]) or None
+
+
+def _effective(*values) -> date | None:
+    """The date a document's operations apply from when they name none: effective_from, else the document date."""
+    for v in values:
+        if v.status == ValueStatus.ACCEPTED and v.value:
+            try:
+                return v.value if isinstance(v.value, date) else date.fromisoformat(str(v.value))
+            except ValueError:
+                return None
+    return None
+
+
+def _op_set(ops, effective: date | None) -> set[tuple]:
+    return {(str(o.op), normalize_target(o.target), o.effective_from or effective) for o in ops}
 
 
 class _Tally:
@@ -187,8 +215,9 @@ def _critical(golden: GoldenSet, records: dict[str, DocumentRecord]) -> _Tally:
         tally.total += len(gold_rates)
         tally.correct += len(gold_rates & got_rates)
         tally.wrong += len(got_rates - gold_rates)
-        gold_ops = {_op_key(o.op, o.target) for o in g.ops}
-        got_ops = {_op_key(o.op, o.target) for o in (r.ops if r else []) if o.status == ValueStatus.ACCEPTED}
+        gold_ops = _op_set(g.ops, _effective(g.effective_from, g.doc_date))
+        got_ops = _op_set([o for o in (r.ops if r else []) if o.status == ValueStatus.ACCEPTED],
+                          _effective(r.effective_from, r.doc_date) if r else None)
         tally.total += len(gold_ops)
         tally.correct += len(gold_ops & got_ops)
         tally.wrong += len(got_ops - gold_ops)
