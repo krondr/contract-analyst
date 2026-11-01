@@ -10,7 +10,7 @@ from contract_analyst.agent.state import AgentState
 
 
 def build_pipeline_graph(ctx: RunContext):
-    from contract_analyst.agent.graph_hybrid import reflect_checklist
+    from contract_analyst.agent.graph_hybrid import kb_check, reflect_checklist
 
     def step(name, fn):
         def node(state: AgentState) -> dict:
@@ -20,7 +20,8 @@ def build_pipeline_graph(ctx: RunContext):
         return node
 
     def report(state: AgentState) -> dict:
-        ctx.reflection = reflect_checklist(ctx)
+        steps.write_report(ctx)  # writes the knowledge base the checklist reads
+        ctx.reflection = reflect_checklist(ctx) + [kb_check(ctx)]
         result = steps.write_report(ctx)
         ctx.trace.event("step", "pipeline", step="write_report", status=result.status)
         ctx.trace.event("final", "pipeline", summary=str(ctx.report_path))

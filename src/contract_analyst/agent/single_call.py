@@ -117,7 +117,8 @@ def run_single_call(input_dir: Path, settings: Settings, as_of: date, out_dir: P
         out = call_structured(client, [{"role": "system", "content": system}, {"role": "user", "content": text}], SingleOut)
         trace.event("step", "single_call", group=name, ok=not isinstance(out, StructuredFailure))
         if isinstance(out, StructuredFailure):
-            issues.append(Issue(code="llm_invalid_json", message=f"папка {name}: ответ не прошёл схему"))
+            issues.append(Issue(code="llm_truncated" if out.truncated else "llm_invalid_json",
+                                message=f"папка {name}: ответ не прошёл схему"))
             continue
         by_name = {d.file.name: d.doc_id for d in docs}
         for d in out.documents:

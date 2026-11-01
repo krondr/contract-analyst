@@ -29,7 +29,7 @@ def analyze(data: Path,
     """Разобрать пакет документов и собрать отчёт."""
     from datetime import date
 
-    from contract_analyst.agent.runner import run_analysis
+    from contract_analyst.agent.runner import InputError, run_analysis
     from contract_analyst.llm.client import LLMUnavailable, ReplayMiss
 
     overrides = {k: v for k, v in {"llm_model": model, "llm_cache_mode": llm_cache, "agent_variant": variant}.items() if v}
@@ -41,11 +41,29 @@ def analyze(data: Path,
     except LLMUnavailable as exc:
         typer.echo(exc.hint)
         raise typer.Exit(2) from None
+    except InputError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(2) from None
     except ReplayMiss as exc:
         typer.echo(f"Нет записанного ответа модели для этого запуска (режим replay): {exc}")
         raise typer.Exit(2) from None
     typer.echo(f"Отчёт: {result.report_path}\nБаза знаний: {result.kb_dir}\nТрасса: {result.trace_path}\n"
                f"Время: {result.seconds} с; вызовов LLM: {result.llm_usage.get('calls', 0)}")
+
+
+def _llm_client(settings):
+    """The LLM client, or a clean exit with the reason when it cannot be used."""
+    from contract_analyst.llm.client import LLMUnavailable
+    from contract_analyst.llm.factory import get_llm_client
+
+    try:
+        client = get_llm_client(settings, Path("data/cache/llm.sqlite"))
+        if hasattr(client, "check_available"):
+            client.check_available()
+    except LLMUnavailable as exc:
+        typer.echo(exc.hint)
+        raise typer.Exit(2) from None
+    return client
 
 
 def _read_all(data: Path, cache: Path | None = None):
@@ -157,18 +175,9 @@ def chat(kb: Path, thread: str = "default", model: str | None = None) -> None:
     """Вопросы по базе знаний прогона, с памятью диалога (пустая строка — выход)."""
     from contract_analyst.chat.graph import ChatSession
     from contract_analyst.kb.store import KnowledgeBase
-    from contract_analyst.llm.client import LLMUnavailable
-    from contract_analyst.llm.factory import get_llm_client
 
     settings = load_settings(**({"llm_model": model} if model else {}))
-    client = get_llm_client(settings, Path("data/cache/llm.sqlite"))
-    try:
-        if hasattr(client, "check_available"):
-            client.check_available()
-    except LLMUnavailable as exc:
-        typer.echo(exc.hint)
-        raise typer.Exit(2) from None
-    session = ChatSession(KnowledgeBase(kb), client, settings, kb / "chat.sqlite")
+    session = ChatSession(KnowledgeBase(kb), _llm_client(settings), settings, kb / "chat.sqlite")
     while question := typer.prompt("Вопрос", default="", show_default=False).strip():
         typer.echo(session.ask(question, thread))
 
@@ -179,12 +188,11 @@ def eval_chat(kb: Path, questions: Path = Path("data/golden/chat_questions.yaml"
     import tempfile
 
     from contract_analyst.eval.chat_eval import chat_eval
-    from contract_analyst.llm.factory import get_llm_client
 
     settings = load_settings(**({"llm_model": model} if model else {}))
+    client = _llm_client(settings)
     with tempfile.TemporaryDirectory() as tmp:
-        scores = chat_eval(kb, questions, get_llm_client(settings, Path("data/cache/llm.sqlite")), settings,
-                           Path(tmp) / "memory.sqlite")
+        scores = chat_eval(kb, questions, client, settings, Path(tmp) / "memory.sqlite")
     typer.echo(scores.model_dump_json(indent=1))
 
 

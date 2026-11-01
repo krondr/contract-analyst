@@ -34,6 +34,8 @@ class FaultyClient:
         self.usage["calls"] += 1
         if self.fault == "timeout":
             raise TimeoutError("model did not answer in time")
+        if self.fault == "truncated":  # a degenerate answer cut at the token cap, every time
+            return '{"number": {"value": "D990000002-01", "quote": "повтор повтор повтор'
         return "это не JSON"
 
 
@@ -110,6 +112,62 @@ def test_llm_timeout(package, tmp_path):
     r = run(package, tmp_path, client=FaultyClient("timeout", [analyze_all("ДС1.pdf")]))
     assert "llm_timeout" in section(r.report_path, "## 5. Отказы и противоречия", "## 6.")
     assert any("timeout" in str(e.get("message", "")).lower() for e in _errors(r))
+
+
+def test_ocr_engine_failure_marks_the_file_unread_instead_of_crashing(package, tmp_path):
+    class BrokenOcr(FakeOcrEngine):
+        def recognize(self, image):
+            raise OSError("tesseract is not installed or it's not in your PATH")
+
+    r = run(package, tmp_path, ocr=BrokenOcr())
+    unprocessed = section(r.report_path, "## 6. Не обработано", "## 7.")
+    assert "ДС2 скан.pdf" in unprocessed and "read_failed" in unprocessed
+    assert "### D990000001-01" in r.report_path.read_text(encoding="utf-8")
+
+
+def _transport_errors():
+    import httpx
+    from ollama import ResponseError
+
+    return [ConnectionError("Failed to connect to Ollama"), ResponseError("model runner has unexpectedly stopped", 500),
+            httpx.ReadError("connection reset")]
+
+
+@pytest.mark.parametrize("error", _transport_errors(), ids=lambda e: type(e).__name__)
+def test_llm_transport_error_ends_in_a_report(package, tmp_path, error):
+    class Down(FaultyClient):
+        def chat(self, messages, tools=None, think=False):
+            raise error
+
+        def structured(self, messages, schema):
+            raise error
+
+    r = run(package, tmp_path, client=Down())
+    assert "llm_error" in section(r.report_path, "## 6. Не обработано", "## 7.")
+    assert any(type(error).__name__ in str(e.get("message", "")) for e in _errors(r) if e["node"] == "executor")
+
+
+def test_replay_miss_inside_a_tool_aborts_the_run(package, tmp_path):
+    from contract_analyst.llm.client import ReplayMiss
+
+    class Recorded(FaultyClient):
+        def structured(self, messages, schema):
+            if schema.__name__ == "PlanOut":
+                return '{"items": ["План"]}'
+            raise ReplayMiss("no cached LLM response for key abc (replay mode)")
+
+    with pytest.raises(ReplayMiss):
+        run(package, tmp_path, client=Recorded(chat_script=[analyze_all("ДС1.pdf")]))
+    (trace,) = (tmp_path / "runs").glob("*/trace.jsonl")
+    events = read_trace(trace)  # the miss stops the run at the tool, not after a partial report
+    assert not [e for e in events if e["event"] in ("tool_result", "reflection")]
+
+
+def test_answer_cut_at_the_token_cap_is_refused_not_guessed(package, tmp_path):
+    r = run(package, tmp_path, client=FaultyClient("truncated", [analyze_all("ДС1.pdf")]))
+    refusals = section(r.report_path, "## 5. Отказы и противоречия", "## 6.")
+    assert "llm_truncated" in refusals and "llm_invalid_json" not in refusals
+    assert "повтор повтор" not in r.report_path.read_text(encoding="utf-8")  # nothing from the cut answer is used
 
 
 def test_tool_exception_does_not_stop_the_run(package, tmp_path, monkeypatch):

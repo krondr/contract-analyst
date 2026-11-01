@@ -98,7 +98,7 @@ def _refusals(ctx: ReportContext) -> list[dict]:
                 rows.append({"file": r.file_name, "field": f"ставка «{rate.label}»", "value": money(rate.amount),
                              "status": rate.status.value, "reason": rate.reason or "", "ref": ref(rate.source)})
         for issue in r.issues:
-            if issue.code in ("llm_invalid_json", "llm_timeout"):
+            if issue.code in ("llm_invalid_json", "llm_timeout", "llm_truncated"):
                 rows.append({"file": r.file_name, "field": "ответ модели", "value": "—", "status": issue.code,
                              "reason": issue.message, "ref": ""})
         for op in r.ops:

@@ -90,7 +90,10 @@ def _call(client: LLMClient, messages: list[Message], schema, issues: list[Issue
         issues.append(Issue(code="llm_timeout", message=f"{doc.file.name}: группа {group} — LLM не ответила: {exc}"))
         return None
     if isinstance(result, StructuredFailure):
-        issues.append(Issue(code="llm_invalid_json",
+        issues.append(Issue(code="llm_truncated", message=f"{doc.file.name}: группа {group} — ответ оборвался на "
+                                                          "лимите токенов и после повтора с просьбой ответить короче")
+                      if result.truncated else
+                      Issue(code="llm_invalid_json",
                             message=f"{doc.file.name}: группа {group} — ответ не прошёл схему после повторов"))
         return None
     return result

@@ -6,20 +6,22 @@ import json
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
-
-import httpx
+from pathlib import Path
 
 from contract_analyst.agent.context import RunContext
 from contract_analyst.analyze.cluster import cluster_contracts, summarize_cluster
 from contract_analyst.assemble.chains import build_chains
 from contract_analyst.assemble.consolidate import consolidate
-from contract_analyst.ingest.inventory import list_inputs
-from contract_analyst.ingest.reader import read_document, rerecognize_pages
+from contract_analyst.ingest.inventory import list_inputs, path_key
+from contract_analyst.ingest.reader import _error, read_document, rerecognize_pages
 from contract_analyst.kb.store import KnowledgeBase
+from contract_analyst.llm.ollama_client import TRANSPORT_ERRORS
 from contract_analyst.models import (
     Decision,
     DocumentRecord,
     DocumentText,
+    InputFile,
+    Issue,
     PageMethod,
     ToolResult,
     ValueStatus,
@@ -72,34 +74,73 @@ def _register(ctx: RunContext, doc: DocumentText) -> None:
     else:
         ctx.documents[doc.doc_id] = doc
         ctx.headers[doc.doc_id] = parse_header(doc.pages[0].text if doc.pages else "")
+        ctx.changed("documents")
 
 
-def resolve_doc_id(ctx: RunContext, ref: str) -> str | None:
-    """Accept a doc_id or a file name: small models often pass the name they saw in the inventory."""
+def _rel(ctx: RunContext, file: InputFile) -> str:
+    path = Path(file.path)
+    return path.relative_to(ctx.input_dir).as_posix() if path.is_relative_to(ctx.input_dir) else file.name
+
+
+def _matches(ctx: RunContext, ref: str) -> list[str]:
+    """doc_ids a reference names. Small models pass what they saw in the inventory: a doc_id, a file name or stem,
+    a path in the package, or a document number."""
     if ref in ctx.documents:
-        return ref
+        return [ref]
+    found = []
     for d in ctx.documents.values():
         header = ctx.headers.get(d.doc_id)
         record = ctx.records.get(d.doc_id)
-        if ref in (d.file.name, d.file.name.rsplit(".", 1)[0]) or (header and header.number == ref) or (
-                record and record.number.value == ref):
-            return d.doc_id
-    return None
+        if ref in (d.file.name, d.file.name.rsplit(".", 1)[0], _rel(ctx, d.file)) or (
+                header and header.number == ref) or (record and record.number.value == ref):
+            found.append(d.doc_id)
+    return found
+
+
+def resolve_doc_id(ctx: RunContext, ref: str) -> str | None:
+    found = _matches(ctx, ref)
+    return found[0] if len(found) == 1 else None
+
+
+def _ambiguous(ref: str, candidates: list[dict]) -> ToolResult:
+    """The same name in several folders (or one number on several documents): never guess which one was meant."""
+    return ToolResult(status="error", error_type="ambiguous", data=fit({"candidates": candidates}),
+                      hint=f"«{ref}» подходит нескольким документам: укажи один из кандидатов")
+
+
+def _doc_candidates(ctx: RunContext, doc_ids: list[str]) -> list[dict]:
+    return [{"doc_id": i, "file": _rel(ctx, ctx.documents[i].file)} for i in doc_ids]
+
+
+def _read(ctx: RunContext, file: InputFile) -> DocumentText:
+    """One file that cannot be read (OCR engine missing, page rendering failed) must not stop the run."""
+    try:
+        return read_document(file, ctx.ocr_engine, ctx.settings, ctx.read_cache)
+    except Exception as exc:  # noqa: BLE001 — recorded as an unread file with its reason
+        return _error(file, f"read_failed: {type(exc).__name__}: {exc}"[:300])
+
+
+def _llm_failure(exc: Exception) -> str:
+    kind = "llm_timeout" if isinstance(exc, TimeoutError) or "Timeout" in type(exc).__name__ else "llm_error"
+    return f"{kind}: {type(exc).__name__}: {exc}"[:300]
+
+
+def _inventory(ctx: RunContext) -> list[InputFile]:
+    files = list_inputs(ctx.input_dir)
+    return files if ctx.only_paths is None else [f for f in files if path_key(f.path) in ctx.only_paths]
 
 
 def ingest_all(ctx: RunContext) -> ToolResult:
-    ctx.inventory = list_inputs(ctx.input_dir)
-    if ctx.only_paths is not None:
-        ctx.inventory = [f for f in ctx.inventory if f.path in ctx.only_paths]
+    ctx.inventory = _inventory(ctx)
     names = {f.path: f.name for f in ctx.inventory}
     todo = []
     for f in ctx.inventory:
-        if f.duplicate_of:
+        if f.duplicate_of in names:  # only copies within the selection: a file picked by --doc is always read
             _unprocessed(ctx, f.name, f"дубликат файла {names.get(f.duplicate_of, f.duplicate_of)}")
         else:
             todo.append(f)
     with ThreadPoolExecutor(max_workers=4) as pool:
-        docs = list(pool.map(lambda f: read_document(f, ctx.ocr_engine, ctx.settings, ctx.read_cache), todo))
+        docs = list(pool.map(lambda f: _read(ctx, f), todo))
     for doc in docs:
         _register(ctx, doc)
     return ToolResult(status="ok", data=fit({
@@ -109,18 +150,20 @@ def ingest_all(ctx: RunContext) -> ToolResult:
 
 def list_only(ctx: RunContext) -> ToolResult:
     """Variant C: the agent sees the file list and decides how to read each file."""
-    ctx.inventory = list_inputs(ctx.input_dir)
+    ctx.inventory = _inventory(ctx)
     return ToolResult(status="ok", data=fit({"files": [{"file": f.name, "format": f.format.value, "bytes": f.size_bytes,
                                                        "duplicate_of": f.duplicate_of} for f in ctx.inventory]}))
 
 
 def read_one(ctx: RunContext, file_name: str) -> ToolResult:
     if not ctx.inventory:
-        ctx.inventory = list_inputs(ctx.input_dir)
-    match = next((f for f in ctx.inventory if f.name == file_name), None)
-    if match is None:
+        ctx.inventory = _inventory(ctx)
+    matches = [f for f in ctx.inventory if file_name in (f.name, _rel(ctx, f))]
+    if not matches:
         return ToolResult(status="error", error_type="not_found", hint="Нет такого файла: вызови list_inputs")
-    doc = read_document(match, ctx.ocr_engine, ctx.settings, ctx.read_cache)
+    if len(matches) > 1:
+        return _ambiguous(file_name, [{"file": _rel(ctx, f)} for f in matches])
+    doc = _read(ctx, matches[0])
     _register(ctx, doc)
     line = doc_line(ctx, doc) if doc.status not in ("error", "empty") else {"file": doc.file.name, "issues": doc.issues}
     if doc.status == "low_quality":
@@ -135,7 +178,9 @@ def read_one(ctx: RunContext, file_name: str) -> ToolResult:
 
 
 def rerecognize(ctx: RunContext, doc_id: str, pages: list[int], strategy: str) -> ToolResult:
-    doc_id = resolve_doc_id(ctx, doc_id) or doc_id
+    if len(found := _matches(ctx, doc_id)) > 1:
+        return _ambiguous(doc_id, _doc_candidates(ctx, found))
+    doc_id = found[0] if found else doc_id
     doc = ctx.documents.get(doc_id)
     if doc is None:
         return ToolResult(status="error", error_type="not_found", hint="Нет такого doc_id")
@@ -146,27 +191,39 @@ def rerecognize(ctx: RunContext, doc_id: str, pages: list[int], strategy: str) -
         mode = "deskew_sauvola"
     elif strategy == "alt_engine":
         engine = get_ocr_engine("rapidocr" if ctx.ocr_engine.name == "tesseract" else "tesseract")
-    pages = [p for p in pages if 1 <= p <= len(doc.pages)]
-    better = rerecognize_pages(doc, pages, engine, mode, dpi, ctx.settings)
+    # Only scanned pages: a text-layer page has no OCR confidence to beat, and OCR would replace exact text.
+    ocr = [p for p in pages if 1 <= p <= len(doc.pages) and doc.pages[p - 1].method == PageMethod.OCR]
+    other = [p for p in pages if p not in ocr]
+    skipped = f"Страницы {other} прочитаны из текстового слоя или пусты: распознавать нечего" if other else None
+    if not ocr:
+        return ToolResult(status="error", error_type="not_ocr", hint=skipped)
+    better = rerecognize_pages(doc, ocr, engine, mode, dpi, ctx.settings)
     report, improved = [], False
-    for p in pages:
+    for p in ocr:
         before = doc.pages[p - 1].quality.ocr_mean_conf or 0.0
         after = better.pages[p - 1].quality.ocr_mean_conf or 0.0
         report.append({"page": p, "before": round(before, 3), "after": round(after, 3)})
         improved = improved or after > before
     if improved:
         ctx.documents[doc_id] = better
+        ctx.headers[doc_id] = parse_header(better.pages[0].text if better.pages else "")
+        ctx.changed("documents")
     status = "ok" if (better if improved else doc).status == "ok" else "low_quality"
+    hints = [skipped,
+             None if status == "ok" else "Качество всё ещё низкое: значения с этих страниц будут отклонены шлюзом",
+             "Текст изменился: разбери документ заново (analyze_document)" if improved and doc_id in ctx.records
+             else None]
     return ToolResult(status=status, data=fit({"doc_id": doc_id, "strategy": strategy, "pages": report,
                                                "adopted": improved}),
-                      hint=None if status == "ok" else "Качество всё ещё низкое: значения с этих страниц будут отклонены шлюзом")
+                      hint="; ".join(h for h in hints if h) or None)
 
 
 def _merge_records(old: DocumentRecord, new: DocumentRecord, groups: list[str]) -> DocumentRecord:
     update = {}
     if "header" in groups:
         update.update({f: getattr(new, f) for f in ("kind", "number", "doc_date", "city", "parent", "effective_from",
-                                                     "subject_category", "parties", "title", "is_draft")})
+                                                     "effective_to", "subject_category", "parties", "title",
+                                                     "is_draft")})
     if {"core_terms", "dealer"} & set(groups):
         update["terms"] = {**old.terms, **new.terms}
     if "money" in groups:
@@ -184,25 +241,30 @@ def _counts(record: DocumentRecord) -> dict:
 
 
 def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None = None) -> ToolResult:
-    done, skipped = [], []
+    done, skipped, ambiguous = [], [], {}
     for ref in doc_ids:
-        doc_id = resolve_doc_id(ctx, ref) or ref
+        if len(found := _matches(ctx, ref)) > 1:
+            ambiguous[ref] = found
+            continue
+        doc_id = found[0] if found else ref
         doc = ctx.documents.get(doc_id)
         if doc is None or (ctx.only_doc_ids is not None and doc_id not in ctx.only_doc_ids):
             skipped.append(doc_id)
             continue
         try:
             record = understand_document(doc, ctx.headers[doc_id], ctx.client, ctx.settings, groups)
-        except (TimeoutError, httpx.TimeoutException) as exc:
-            _unprocessed(ctx, doc.file.name, f"llm_timeout: {exc}")
+        except TRANSPORT_ERRORS as exc:
+            _unprocessed(ctx, doc.file.name, _llm_failure(exc))
             skipped.append(doc_id)
             continue
         for issue in record.issues:
-            if issue.code in ("llm_invalid_json", "llm_timeout"):
+            if issue.code in ("llm_invalid_json", "llm_timeout", "llm_truncated"):
                 ctx.trace.event("error", "tools", doc_id=doc_id, message=f"{issue.code}: {issue.message}")
         if groups and doc_id in ctx.records:
             record = _merge_records(ctx.records[doc_id], record, groups)
-        ctx.records[doc_id] = record
+        if ctx.records.get(doc_id) != record:
+            ctx.records[doc_id] = record
+            ctx.changed("records")
         rejected = [r for r in [*record.rates, *record.ops] if r.status == ValueStatus.REJECTED]
         if rejected:
             ctx.trace.event("gate_reject", "tools", doc_id=doc_id, count=len(rejected),
@@ -210,13 +272,20 @@ def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None =
         done.append({"doc_id": doc_id, "number": record.number.value, "kind": record.kind.value,
                      "parent": record.parent.value.number if record.parent.value else None, "values": _counts(record),
                      "issues": [i.code for i in record.issues]})
+    if ambiguous and not done:
+        return _ambiguous(", ".join(ambiguous), _doc_candidates(ctx, [i for ids in ambiguous.values() for i in ids]))
     status = "ok" if done else "empty"
-    return ToolResult(status=status, data=fit({"analyzed": done, "skipped": skipped}),
+    return ToolResult(status=status, data=fit({"analyzed": done, "skipped": skipped,
+                                               **({"ambiguous": list(ambiguous)} if ambiguous else {})}),
                       hint=None if done else "Ни один документ не разобран: проверь doc_id через list_inputs")
 
 
 def assemble_chains(ctx: RunContext) -> ToolResult:
-    ctx.chains = build_chains(list(ctx.records.values()))
+    chains = build_chains(list(ctx.records.values()))
+    ctx.built("chains")
+    if chains != ctx.chains:
+        ctx.chains = chains
+        ctx.changed("chains")
     return ToolResult(status="ok" if ctx.chains else "empty", data=fit({"chains": [
         {"contract": c.contract_number, "documents": len(c.docs), "has_main": c.main_doc_id is not None,
          "issues": sorted({i.code for i in c.issues})} for c in ctx.chains]}))
@@ -224,37 +293,74 @@ def assemble_chains(ctx: RunContext) -> ToolResult:
 
 def consolidate_all(ctx: RunContext, contract_number: str | None = None, as_of: date | None = None) -> ToolResult:
     when = as_of or ctx.as_of
-    out = []
+    out, results = [], {}
     for chain in ctx.chains:
         if contract_number and chain.contract_number != contract_number:
             continue
         if ctx.settings.consolidation_mode == "llm":
             from contract_analyst.assemble.merge_llm import consolidate_llm
 
-            result = consolidate_llm(chain, ctx.records, when, ctx.client)
+            try:
+                result = consolidate_llm(chain, ctx.records, when, ctx.client)
+            except TRANSPORT_ERRORS as exc:
+                result = consolidate(chain, ctx.records, when)
+                result.issues.append(Issue(code="llm_merge_failed", message=f"{_llm_failure(exc)}: свёрнуто кодом"))
         else:
             result = consolidate(chain, ctx.records, when)
-        if when == ctx.as_of:
-            ctx.consolidated[chain.contract_number] = result
+        results[chain.contract_number] = result
         out.append({"contract": chain.contract_number, "status": result.status, "since": result.status_since,
                     "terms": len(result.terms), "rates": len(result.rates), "planned_rates": len(result.planned_rates)})
+    if when == ctx.as_of:
+        # A full run replaces the set, so contracts whose chain is gone do not linger.
+        merged = {**ctx.consolidated, **results} if contract_number else results
+        if merged != ctx.consolidated:
+            ctx.consolidated = merged
+            ctx.changed("consolidated")
+        if not contract_number:
+            ctx.built("consolidated")
     return ToolResult(status="ok" if out else "empty", data=fit({"as_of": when, "contracts": out}))
 
 
 def cluster_all(ctx: RunContext) -> ToolResult:
-    ctx.clusters = cluster_contracts(list(ctx.consolidated.values()), ctx.records, ctx.chains, ctx.settings)
-    for cluster in ctx.clusters:
+    clusters = cluster_contracts(list(ctx.consolidated.values()), ctx.records, ctx.chains, ctx.settings)
+    for cluster in clusters:
         try:
             cluster.summary = summarize_cluster(cluster, ctx.consolidated, ctx.client)
-        except (TimeoutError, httpx.TimeoutException):
+        except TRANSPORT_ERRORS as exc:
+            ctx.trace.event("error", "tools", message=_llm_failure(exc))
             cluster.summary = None
+    ctx.built("clusters")
+    if clusters != ctx.clusters:
+        ctx.clusters = clusters
+        ctx.changed("clusters")
     return ToolResult(status="ok" if ctx.clusters else "empty", data=fit({"clusters": [
         {"label": c.label, "members": c.members, "differences": len(c.differences)} for c in ctx.clusters]}))
 
 
 def record_decision(ctx: RunContext, decision: Decision) -> ToolResult:
     ctx.decisions.append(decision)
+    ctx.changed("decisions")
     return ToolResult(status="ok", data={"decisions": len(ctx.decisions)})
+
+
+def unverified_in_kb(kb_dir: Path) -> list[str]:
+    """Where the written knowledge base holds a value the gate refused (rejected or redacted). A field keeps its
+    status with the value scrubbed; a refused rate or operation must not be stored at all."""
+    leaks: list[str] = []
+
+    def walk(node, where: str) -> None:
+        if isinstance(node, dict):
+            if node.get("status") in ("rejected", "redacted") and node.get("value", node) is not None:
+                leaks.append(where)
+            for key, child in node.items():
+                walk(child, f"{where}.{key}")
+        elif isinstance(node, list):
+            for i, child in enumerate(node):
+                walk(child, f"{where}[{i}]")
+
+    for path in sorted(kb_dir.glob("*.json")):
+        walk(json.loads(path.read_text(encoding="utf-8")), path.stem)
+    return leaks
 
 
 def write_report(ctx: RunContext) -> ToolResult:
@@ -270,4 +376,6 @@ def write_report(ctx: RunContext) -> ToolResult:
     ctx.removed_claims = removed
     KnowledgeBase(ctx.run_dir / "kb").save(documents=ctx.documents, records=ctx.records, chains=ctx.chains,
                                            consolidated=ctx.consolidated, clusters=ctx.clusters, decisions=ctx.decisions)
-    return ToolResult(status="ok", data={"report": str(ctx.report_path), "removed_claims": removed})
+    # Run-independent: the result goes back to the model, and a timestamped path would change the next turn's
+    # cache key, so a recorded run could never be replayed.
+    return ToolResult(status="ok", data={"report": ctx.report_path.name, "removed_claims": removed})

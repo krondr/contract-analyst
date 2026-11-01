@@ -17,6 +17,16 @@ def _skipped(rel: Path) -> bool:
     return any(part.startswith(".") for part in rel.parts) or rel.name.startswith("~$") or rel.name in _SYSTEM_NAMES
 
 
+def path_key(path: str | Path) -> str:
+    """A path as the user means it: resolved, in NFC (macOS hands out file names in NFD, terminals type NFC)."""
+    return unicodedata.normalize("NFC", str(Path(path).resolve()))
+
+
+def input_paths(root: Path) -> list[Path]:
+    """The files list_inputs would take, without reading them."""
+    return sorted(p for p in root.rglob("*") if p.is_file() and not _skipped(p.relative_to(root)))
+
+
 def list_inputs(root: Path) -> list[InputFile]:
     files: list[InputFile] = []
     first_by_hash: dict[str, str] = {}

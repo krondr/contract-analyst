@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from contract_analyst.agent.guards import Guard
 from contract_analyst.agent.steps import ingest_all
 from contract_analyst.agent.tools import TOOLS, dispatch, tool_schemas
@@ -55,6 +57,102 @@ def test_bad_args_and_unknown_tool(ctx):
     bad = ToolCall(id="x", name="rerecognize", args={"doc_id": "a", "pages": "все", "strategy": "magic"})
     assert dispatch(ctx, bad, Guard(10, 60)).error_type == "bad_args"
     assert dispatch(ctx, call("format_disk"), Guard(10, 60)).error_type == "unknown_tool"
+
+
+def test_invalid_calls_count_against_the_budget(ctx):
+    guard = Guard(max_steps=2, max_seconds=60)
+    dispatch(ctx, ToolCall(id="x", name="analyze_document", args={}), guard)
+    dispatch(ctx, call("format_disk"), guard)
+    assert dispatch(ctx, call("list_inputs"), guard).error_type == "budget_exceeded"
+
+
+def test_consecutive_errors_stop_the_agent_and_a_success_resets_them(ctx):
+    guard = Guard(max_steps=50, max_seconds=60, max_errors_in_row=3)
+    for _ in range(2):
+        dispatch(ctx, ToolCall(id="x", name="analyze_document", args={}), guard)
+    dispatch(ctx, call("list_inputs"), guard)
+    assert not guard.stuck
+    for _ in range(3):
+        dispatch(ctx, ToolCall(id="x", name="analyze_document", args={}), guard)
+    assert guard.stuck
+
+
+def _scanned(ctx, file_name, text, conf):
+    """Replace a document's page 1 with an OCR page of the given text and confidence."""
+    from contract_analyst.agent.steps import resolve_doc_id
+    from contract_analyst.models import PageMethod, PageQuality
+
+    doc_id = resolve_doc_id(ctx, file_name)
+    doc = ctx.documents[doc_id]
+    page = doc.pages[0].model_copy(update={"method": PageMethod.OCR, "text": text, "quality": PageQuality(
+        chars=len(text), ocr_mean_conf=conf, low_conf_ratio=0.0 if conf > 0.9 else 0.6)})
+    return doc_id, doc.model_copy(update={"pages": [page], "status": "ok" if conf > 0.9 else "low_quality"})
+
+
+def test_rerecognize_leaves_text_layer_pages_alone(ctx, monkeypatch):
+    from contract_analyst.agent import steps
+
+    ingest_all(ctx)
+    monkeypatch.setattr(steps, "rerecognize_pages", lambda *a, **k: pytest.fail("a text page was sent to OCR"))
+    result = dispatch(ctx, call("rerecognize", doc_id="Договор аренды.pdf", pages=[1], strategy="higher_dpi"),
+                      Guard(10, 60))
+    assert result.error_type == "not_ocr" and "текстового слоя" in result.hint
+
+
+def test_rerecognize_reparses_the_header_of_the_better_text(ctx, monkeypatch):
+    from contract_analyst.agent import steps
+
+    ingest_all(ctx)
+    doc_id, worse = _scanned(ctx, "ДС2 скан.pdf", "Доп0лн1тельн0е с0глашен1е", 0.4)
+    ctx.documents[doc_id] = worse
+    ctx.headers[doc_id] = steps.parse_header(worse.pages[0].text)
+    _, better = _scanned(ctx, "ДС2 скан.pdf", "Дополнительное соглашение № D990000003-01\nк Договору аренды "
+                                             "№ D990000001-01 от 10.01.2024 г.", 0.97)
+    monkeypatch.setattr(steps, "rerecognize_pages", lambda *a, **k: better)
+    result = dispatch(ctx, call("rerecognize", doc_id=doc_id, pages=[1], strategy="higher_dpi"), Guard(10, 60))
+    assert result.data["adopted"] and ctx.headers[doc_id].number == "D990000003-01"
+
+
+def test_header_reanalysis_updates_the_end_date(ctx, monkeypatch):
+    from datetime import date
+
+    import contract_analyst.agent.steps as steps_module
+    from tests.fixtures.builders import make_record
+
+    ends = iter([None, date(2026, 12, 31)])
+    monkeypatch.setattr(steps_module, "understand_document", lambda doc, header, client, settings, groups=None:
+                        make_record(doc.doc_id, "D990000002-01", effective_to=next(ends)))
+    ingest_all(ctx)
+    steps_module.analyze_docs(ctx, ["ДС1.pdf"])
+    steps_module.analyze_docs(ctx, ["ДС1.pdf"], ["header"])
+    (record,) = ctx.records.values()
+    assert record.effective_to.value == date(2026, 12, 31)
+
+
+@pytest.fixture
+def twins(tmp_path):
+    """The same file name in two folders, as in a package sorted by contract."""
+    for folder, number in (("Аренда", "D990000002-01"), ("Услуги", "D990000005-01")):
+        (tmp_path / "pkg" / folder).mkdir(parents=True)
+        make_text_pdf(tmp_path / "pkg" / folder / "ДС1.pdf", [f"Дополнительное соглашение № {number}"])
+    return make_ctx(tmp_path, tmp_path / "pkg")
+
+
+def test_ambiguous_file_name_lists_the_candidates_instead_of_taking_the_first(twins):
+    ingest_all(twins)
+    guard = Guard(10, 60)
+    for tool, args in (("analyze_document", {"doc_id": "ДС1.pdf"}),
+                       ("rerecognize", {"doc_id": "ДС1", "pages": [1], "strategy": "higher_dpi"})):
+        result = dispatch(twins, call(tool, **args), guard)
+        assert result.error_type == "ambiguous"
+        assert {c["file"] for c in result.data["candidates"]} == {"Аренда/ДС1.pdf", "Услуги/ДС1.pdf"}
+        assert {c["doc_id"] for c in result.data["candidates"]} == set(twins.documents)
+
+
+def test_read_document_takes_a_relative_path_when_names_repeat(twins):
+    guard = Guard(10, 60)
+    assert dispatch(twins, call("read_document", file_name="ДС1.pdf"), guard).error_type == "ambiguous"
+    assert dispatch(twins, call("read_document", file_name="Услуги/ДС1.pdf"), guard).data["number"] == "D990000005-01"
 
 
 def test_scan_read_returns_low_quality_with_hint(tmp_path, fixtures_package):

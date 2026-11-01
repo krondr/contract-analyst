@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 
-import httpx
 from langgraph.graph import END, START, StateGraph
 
 from contract_analyst.agent import steps
@@ -12,7 +11,9 @@ from contract_analyst.agent.context import RunContext
 from contract_analyst.agent.guards import Guard
 from contract_analyst.agent.state import AgentState, PlanOut, ReflectionOut
 from contract_analyst.agent.tools import dispatch, tool_schemas
+from contract_analyst.agent.trace import read_trace, thought_counts
 from contract_analyst.llm.client import ToolCall
+from contract_analyst.llm.ollama_client import TRANSPORT_ERRORS
 from contract_analyst.llm.prompts import load_prompt
 from contract_analyst.llm.structured import StructuredFailure, call_structured
 from contract_analyst.report.render import ReflectionItem
@@ -20,37 +21,54 @@ from contract_analyst.report.render import ReflectionItem
 MANDATORY = ["Каждый файл разобран или отклонён с причиной", "Цепочки договоров собраны",
              "Условия свёрнуты на дату анализа", "Кластеры и сравнение внутри кластеров готовы"]
 REQUIRED_HEADINGS = ["## 1. Сводка запуска", "## 2. Опись документов", "## 3. Кластеры", "## 4. Договоры",
-                     "## 5. Отказы и противоречия", "## 6. Не обработано", "## 7. Reflection"]
+                     "## 5. Отказы и противоречия", "## 6. Не обработано", "## 7. Reflection",
+                     "## 8. Трасса и метрики"]
+KB_ITEM = "Непроверенные значения не записаны в базу знаний"
+
+
+def _llm_error(exc: Exception) -> str:
+    return f"LLM: {type(exc).__name__}: {exc}"[:300]
 
 
 def safe_structured(ctx: RunContext, node: str, messages, schema):
-    """Structured call where a timeout counts as a failed answer instead of crashing the run."""
+    """Structured call where a timeout or a broken connection counts as a failed answer, not a crash."""
     try:
         return call_structured(ctx.client, messages, schema)
-    except (TimeoutError, httpx.TimeoutException) as exc:
-        ctx.trace.event("error", node, message=f"LLM timeout: {exc}")
-        return StructuredFailure(errors=[f"timeout: {exc}"], raw=[])
+    except TRANSPORT_ERRORS as exc:
+        ctx.trace.event("error", node, message=_llm_error(exc))
+        return StructuredFailure(errors=[_llm_error(exc)], raw=[])
 
 
 def reflect_checklist(ctx: RunContext) -> list[ReflectionItem]:
     scope = [d for d in ctx.documents.values() if ctx.only_doc_ids is None or d.doc_id in ctx.only_doc_ids]
     missing = [d.file.name for d in scope if d.doc_id not in ctx.records]
     unconsolidated = [c.contract_number for c in ctx.chains if c.contract_number not in ctx.consolidated]
-    refused = sum(1 for r in ctx.records.values() for v in [r.number, r.doc_date, r.parent, r.effective_from,
-                                                            *r.terms.values(), *r.rates, *r.ops]
-                  if v.status.value in ("rejected", "conflict", "redacted"))
+    stale = " — устарели: исходные данные изменились после сборки"
+    chains_stale, consolidated_stale = ctx.stale("chains"), ctx.stale("consolidated")
+    clusters_stale = ctx.stale("clusters")
     return [
         ReflectionItem(item=MANDATORY[0], ok=not missing,
                        note=f"не разобраны: {', '.join(missing)}" if missing
                        else f"разобрано {len(ctx.records)}, не обработано файлов: {len(ctx.unprocessed)}"),
-        ReflectionItem(item=MANDATORY[1], ok=bool(ctx.chains) or not ctx.records, note=f"цепочек: {len(ctx.chains)}"),
-        ReflectionItem(item=MANDATORY[2], ok=bool(ctx.chains) and not unconsolidated,
-                       note=f"без свёртки: {', '.join(unconsolidated)}" if unconsolidated else f"на {ctx.as_of}"),
-        ReflectionItem(item=MANDATORY[3], ok=bool(ctx.clusters) or not ctx.consolidated,
-                       note=f"кластеров: {len(ctx.clusters)}"),
-        ReflectionItem(item="Непроверенные значения не записаны в базу знаний", ok=True,
-                       note=f"отклонено или спорно: {refused} — показаны в разделе 5"),
+        ReflectionItem(item=MANDATORY[1], ok=not ctx.records or (bool(ctx.chains) and not chains_stale),
+                       note=f"цепочек: {len(ctx.chains)}" + (stale if ctx.chains and chains_stale else "")),
+        ReflectionItem(item=MANDATORY[2], ok=bool(ctx.chains) and not unconsolidated and not consolidated_stale,
+                       note=f"без свёртки: {', '.join(unconsolidated)}" if unconsolidated
+                       else f"на {ctx.as_of}" + (stale if consolidated_stale else "")),
+        ReflectionItem(item=MANDATORY[3], ok=not ctx.consolidated or (bool(ctx.clusters) and not clusters_stale),
+                       note=f"кластеров: {len(ctx.clusters)}" + (stale if ctx.clusters and clusters_stale else "")),
     ]
+
+
+def kb_check(ctx: RunContext) -> ReflectionItem:
+    """Checked on the knowledge base as written, so call it after write_report. Not a gap for the agent: only code
+    decides what is stored."""
+    refused = sum(1 for r in ctx.records.values() for v in [r.number, r.doc_date, r.parent, r.effective_from,
+                                                            *r.terms.values(), *r.rates, *r.ops]
+                  if v.status.value in ("rejected", "conflict", "redacted"))
+    leaks = steps.unverified_in_kb(ctx.run_dir / "kb")
+    return ReflectionItem(item=KB_ITEM, ok=not leaks, note=f"в базе знаний: {', '.join(leaks[:5])}" if leaks
+                          else f"отклонено или спорно: {refused} — показаны в разделе 5")
 
 
 def _inventory_text(ctx: RunContext) -> str:
@@ -65,7 +83,7 @@ def _inventory_text(ctx: RunContext) -> str:
 
 
 def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
-    guard = Guard(ctx.settings.max_steps, ctx.settings.max_seconds)
+    guard = Guard(ctx.settings.max_steps, ctx.settings.max_seconds, ctx.settings.max_tool_errors_in_row)
 
     def ingest(state: AgentState) -> dict:
         if with_ingest:
@@ -77,18 +95,22 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
         prompt = load_prompt("planner")
         plan = safe_structured(ctx, "planner", [{"role": "system", "content": prompt.render(as_of=ctx.as_of)},
                                                 {"role": "user", "content": inventory}], PlanOut)
-        items = (plan.items if not isinstance(plan, StructuredFailure) else []) + MANDATORY
+        ctx.plan = plan.items if not isinstance(plan, StructuredFailure) else []
+        items = ctx.plan + MANDATORY
         ctx.trace.event("plan", "planner", items=items)
         system = load_prompt("executor").render(as_of=ctx.as_of, plan=items, with_ingest=with_ingest)
         return {"plan": items, "messages": [{"role": "system", "content": system},
                                             {"role": "user", "content": inventory}]}
 
     def executor(state: AgentState) -> dict:
+        cut = ctx.client.usage.get("truncated", 0)
         try:
             turn = ctx.client.chat(state["messages"], tool_schemas(), think=ctx.settings.agent_thinking)
-        except (TimeoutError, httpx.TimeoutException) as exc:
-            ctx.trace.event("error", "executor", message=f"LLM timeout: {exc}")
+        except TRANSPORT_ERRORS as exc:  # the run goes on to the reflector, the safety net and the report
+            ctx.trace.event("error", "executor", message=_llm_error(exc))
             return {"messages": [{"role": "assistant", "content": "", "tool_calls": []}]}
+        if ctx.client.usage.get("truncated", 0) > cut:
+            ctx.trace.event("error", "executor", message="llm_truncated: ход оборвался на лимите токенов")
         ctx.trace.event("llm_call", "executor", content=turn.content[:300], reasoning=turn.reasoning,
                         tool_calls=[c.name for c in turn.tool_calls])
         message = {"role": "assistant", "content": turn.content, "tool_calls": [c.model_dump() for c in turn.tool_calls]}
@@ -109,7 +131,7 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
         return {"messages": out}
 
     def after_tools(state: AgentState) -> str:
-        return "reflector" if guard.exhausted else "executor"
+        return "reflector" if guard.exhausted or guard.stuck else "executor"
 
     def reflector(state: AgentState) -> dict:
         items = reflect_checklist(ctx)
@@ -119,12 +141,16 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
             {"role": "system", "content": prompt.render(plan=state["plan"])},
             {"role": "user", "content": f"Проверки кодом:\n{summary}"}], ReflectionOut)
         llm_gaps = [] if isinstance(verdict, StructuredFailure) else verdict.gaps
+        ctx.plan_checks = {} if isinstance(verdict, StructuredFailure) else {c.n: c for c in verdict.items}
         gaps = [f"{i.item}: {i.note}" for i in items if not i.ok] + llm_gaps
+        if guard.stuck:
+            gaps.append(f"{guard.errors_in_row} вызовов подряд закончились ошибкой: прочитай hint и смени вызов")
         round_no = state["reflection_round"] + 1
         ctx.trace.event("reflection", "reflector", round=round_no, items=[i.model_dump() for i in items], gaps=gaps)
         ctx.reflection = items
         update: dict = {"reflection_round": round_no, "gaps": gaps}
         if gaps and round_no < ctx.settings.max_reflection_rounds and not guard.exhausted:
+            guard.errors_in_row = 0  # one fresh chance per round: a model stuck again ends at the reporter
             update["messages"] = [{"role": "user", "content": "Рефлексия: цель ещё не достигнута. Доделай:\n"
                                    + "\n".join(f"- {g}" for g in gaps)}]
         return update
@@ -134,17 +160,7 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
         return "executor" if loop else "reporter"
 
     def reporter(state: AgentState) -> dict:
-        complete_with_code(ctx)
-        ctx.reflection = reflect_checklist(ctx) + [ReflectionItem(
-            item="Шаги, выполненные кодом за агента", ok=not ctx.safety_net,
-            note=", ".join(ctx.safety_net) or "нет — агент выполнил план сам")]
-        steps.write_report(ctx)
-        text = ctx.report_path.read_text(encoding="utf-8")
-        missing = [h for h in REQUIRED_HEADINGS if h not in text]
-        ctx.reflection.append(ReflectionItem(item="Все разделы отчёта на месте", ok=not missing,
-                                             note=", ".join(missing) or "8 разделов"))
-        steps.write_report(ctx)
-        ctx.trace.event("final", "reporter", summary=str(ctx.report_path))
+        report(ctx)
         return {}
 
     graph = StateGraph(AgentState)
@@ -161,6 +177,29 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
     return graph.compile()
 
 
+def report(ctx: RunContext) -> None:
+    """Reporter: code finishes what the agent left undone, then the report is written and checked. The runner also
+    calls it when the graph is cut off, so every run ends in a report."""
+    complete_with_code(ctx)
+    steps.write_report(ctx)  # writes the knowledge base the checklist reads
+    found, total = thought_counts(read_trace(ctx.trace.path))
+    checks = {n: ctx.plan_checks.get(n) for n in range(1, len(ctx.plan) + 1)}
+    ctx.reflection = [  # the planner's own items, as the reflector (LLM) judged them
+        ReflectionItem(item=item, ok=bool(checks[n] and checks[n].done),
+                       note=f"рефлектор (LLM): {checks[n].note or '—'}" if checks[n] else "рефлектор не оценил пункт")
+        for n, item in enumerate(ctx.plan, start=1)] + reflect_checklist(ctx) + [kb_check(ctx),
+        ReflectionItem(item="Шаги, выполненные кодом за агента", ok=not ctx.safety_net,
+                       note=", ".join(ctx.safety_net) or "нет — агент выполнил план сам"),
+        ReflectionItem(item="Мысль записана у каждого вызова инструмента", ok=found == total,
+                       note=f"{found} из {total}" if total else "вызовов инструментов не было")]
+    text = ctx.report_path.read_text(encoding="utf-8")
+    missing = [h for h in REQUIRED_HEADINGS if h not in text]
+    ctx.reflection.append(ReflectionItem(item="Все разделы отчёта на месте", ok=not missing,
+                                         note=", ".join(missing) or "8 разделов"))
+    steps.write_report(ctx)
+    ctx.trace.event("final", "reporter", summary=str(ctx.report_path))
+
+
 def complete_with_code(ctx: RunContext) -> None:
     """Safety net: whatever the agent left undone is finished by code and recorded as such."""
     if not ctx.documents and not ctx.inventory:
@@ -170,12 +209,14 @@ def complete_with_code(ctx: RunContext) -> None:
     if scope:
         steps.analyze_docs(ctx, scope)
         ctx.safety_net.append("analyze_docs")
-    if ctx.records and not ctx.chains or {r for r in ctx.records} - {d.doc_id for c in ctx.chains for d in c.docs}:
+    # Each part is redone when its inputs changed after it was built, so a rebuild cascades:
+    # new records -> chains -> consolidation -> clusters.
+    if ctx.records and ctx.stale("chains"):
         steps.assemble_chains(ctx)
         ctx.safety_net.append("assemble_chains")
-    if any(c.contract_number not in ctx.consolidated for c in ctx.chains):
+    if ctx.chains and ctx.stale("consolidated"):
         steps.consolidate_all(ctx)
         ctx.safety_net.append("consolidate_all")
-    if ctx.consolidated and not ctx.clusters:
+    if ctx.consolidated and ctx.stale("clusters"):
         steps.cluster_all(ctx)
         ctx.safety_net.append("cluster_all")
