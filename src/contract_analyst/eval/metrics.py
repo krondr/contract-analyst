@@ -153,8 +153,20 @@ def _accepted_rows(rows: list) -> list:
     return [r for r in rows if r.status == ValueStatus.ACCEPTED]
 
 
-def _rate_set(rates) -> set[tuple]:
-    return {(Decimal(r.amount).normalize(), r.vat, r.valid_from, r.valid_to) for r in rates}
+def _rate_set(rates, start: date | None = None, end: date | None = None) -> set[tuple]:
+    """A row without its own period runs from its document's start to its document's end, as the fold applies it."""
+    return {(Decimal(r.amount).normalize(), r.vat, r.valid_from or start, r.valid_to or end) for r in rates}
+
+
+def _row_period(records: dict) -> callable:
+    """(start, end) of the document a consolidated row came from."""
+    def period(row) -> tuple[date | None, date | None]:
+        rec = records.get(row.source.doc_id) if row.source else None
+        if rec is None:
+            return None, None
+        end = rec.effective_to.value if rec.effective_to.status == ValueStatus.ACCEPTED else None
+        return _effective(rec.effective_from, rec.doc_date), end
+    return period
 
 
 def normalize_target(target: str | None) -> str | None:
@@ -215,8 +227,12 @@ def _critical(golden: GoldenSet, records: dict[str, DocumentRecord]) -> _Tally:
         tally.scalar(g.parent_number.value, g.parent_number.status, parent.number if parent else None)
         tally.scalar(g.parent_date.value, g.parent_date.status,
                      parent.date_stated.isoformat() if parent and parent.date_stated else None)
-        gold_rates = _rate_set(g.rates)
-        got_rates = _rate_set([x for x in (r.rates if r else []) if x.status == ValueStatus.ACCEPTED])
+        gold_end = g.effective_to.value if g.effective_to.status == "accepted" else None
+        gold_rates = _rate_set(g.rates, _effective(g.effective_from, g.doc_date),
+                               date.fromisoformat(str(gold_end)) if gold_end else None)
+        got_end = r.effective_to.value if r and r.effective_to.status == ValueStatus.ACCEPTED else None
+        got_rates = _rate_set([x for x in (r.rates if r else []) if x.status == ValueStatus.ACCEPTED],
+                              _effective(r.effective_from, r.doc_date) if r else None, got_end)
         tally.total += len(gold_rates)
         tally.correct += len(gold_rates & got_rates)
         tally.wrong += len(got_rates - gold_rates)
@@ -258,6 +274,7 @@ class RunsAt:
 
 def _consolidation(golden: GoldenSet, runs: RunsAt) -> float:
     points = earned = 0
+    period = _row_period(KnowledgeBase(runs.primary / "kb").records())
     for chain in golden.chains:
         for when in golden.as_of_dates:
             result = runs.terms(chain.contract_number, when)
@@ -266,7 +283,10 @@ def _consolidation(golden: GoldenSet, runs: RunsAt) -> float:
                 earned += bool(result and result.status == chain.status_at[when])
             if when in chain.rates_at:
                 points += 1
-                earned += bool(result and _rate_set(_accepted_rows(result.rates)) == _rate_set(chain.rates_at[when]))
+                rows = _accepted_rows(result.rates) if result else []
+                got = {(Decimal(r.amount).normalize(), r.vat, r.valid_from or period(r)[0], r.valid_to or period(r)[1])
+                       for r in rows}
+                earned += bool(result and got == _rate_set(chain.rates_at[when]))
             for term, value in chain.terms_at.get(when, {}).items():
                 points += 1
                 state = result.terms.get(term) if result else None

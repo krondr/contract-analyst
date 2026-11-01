@@ -232,3 +232,13 @@ def test_truncated_answers_lower_the_json_validity_rate(tmp_path):
     run = make_run(tmp_path, tweak=truncated)
     (run / "metrics.json").write_text('{"llm_usage": {"calls": 4}}', encoding="utf-8")
     assert score_run(run, golden()).json_valid_rate == 0.75
+
+
+def test_rate_without_its_own_start_runs_from_its_document(tmp_path):
+    def undated(records):
+        records["s"].rates[0] = records["s"].rates[0].model_copy(update={"valid_from": None})
+
+    baseline = score_run(make_run(tmp_path / "dated"), golden())
+    s = score_run(make_run(tmp_path / "undated", tweak=undated), golden())
+    assert s.critical_accepted_wrong == 0 and s.critical_accepted_correct == baseline.critical_accepted_correct
+    assert s.consolidation_acc == baseline.consolidation_acc

@@ -376,3 +376,10 @@ def test_penalty_is_not_a_rate():
     r = gate_rate(RateOut(label="штраф за неоказание услуг", amount="5000", page=1, quote=quote),
                   text_doc([quote + "."]), load_settings())
     assert r.status == "rejected" and r.reason.startswith("not_a_rate")
+
+
+def test_agreement_on_mutual_termination_of_obligations_is_operative():
+    text = "1. Стороны договорились о взаимном прекращении обязательств по продвижению услуг с 01.07.2026 г."
+    quote = "Стороны договорились о взаимном прекращении обязательств по продвижению услуг с 01.07.2026 г"
+    assert gate_op(OpOut(op="suspend_part", effective_from="2026-07-01", page=1, quote=quote), text_doc([text]),
+                   load_settings()).status == "accepted"

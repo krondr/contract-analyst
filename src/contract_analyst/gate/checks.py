@@ -40,11 +40,11 @@ _IN_FORCE = re.compile(r"вступа\w*\s+в\s+(?:силу|действие)|р
 _REFERENCE = re.compile(r"\bот\s*$", re.IGNORECASE)  # «Договор от 21.01.2021» names a document, not a period
 # Wording that carries an operation out, per operation type: every pattern must match. «Договор может быть
 # расторгнут» only allows a termination, so permissive or conditional wording in the sentence refuses it.
-_AGREED_ON = r"(?:договорились|пришли\s+к\s+соглашению|достигли\s+соглашения)\s+о\s+"
+_AGREED_ON = r"(?:договорились|пришли\s+к\s+соглашению|достигли\s+соглашения)\s+об?\s+(?:[а-яё]+\s+){0,2}?"
 _STOPS = r"прекрат(?:ить|ил\w*)|прекраща(?:ет|ют|ется|ются)\b"
 _OPERATIVE = {
-    OpType.TERMINATE: [rf"расторг(?:нуть|ается|аются|нут\w*)|{_STOPS}|{_AGREED_ON}(?:расторжении|прекращении)"],
-    OpType.SUSPEND_PART: [rf"{_STOPS}|приостан(?:овить|овлен\w*|авлива\w*)|{_AGREED_ON}(?:прекращении|приостановлении)"],
+    OpType.TERMINATE: [rf"расторг(?:нуть|ается|аются|нут\w*)|{_STOPS}|{_AGREED_ON}(?:расторжени\w*|прекращени\w*)"],
+    OpType.SUSPEND_PART: [rf"{_STOPS}|приостан(?:овить|овлен\w*|авлива\w*)|{_AGREED_ON}(?:прекращени\w*|приостановлени\w*)"],
     OpType.RESTATE_DOCUMENT: [r"изложить|излага(?:ется|ются)|изложен\w*|читать|принять", r"редакци"],
 }
 _PERMISSIVE = re.compile(r"\bмо(?:жет|гут)\b|\bвправе\b|\bиме(?:ет|ют)\s+право\b|\bв\s+случа(?:е|ях)\b"
