@@ -32,6 +32,7 @@ Figure = date | Decimal | str  # what a value states and the page must show: a d
 MIN_DATE, MAX_DATE = date(2000, 1, 1), date(2035, 12, 31)
 _TYPOGRAPHY = str.maketrans({"«": '"', "»": '"', "“": '"', "”": '"', "„": '"', "–": "-", "—": "-"})
 _TOKEN_RE = re.compile(r"[0-9A-Za-zА-Яа-яЁё-]{3,}")
+_ISO_DATE = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
 # A sentence ends at ; or at . ! ? after a word of four letters or more (so «п.», «г.», «руб.» do not end one),
 # and before a line that starts a numbered clause.
 _SENTENCE_END = re.compile(r"(?<=[^\W\d_]{4})[.!?](?=\s|$)|;|\n(?=\d{1,3}(?:\.\d{1,3})*\.?\s)")
@@ -160,7 +161,12 @@ def _value_figures(value: str, kind: ValueKind) -> list[Figure]:
         return [n] if (n := _as_decimal(value)) is not None else []
     if kind == "doc_number":
         return [value]
-    return [f for f, *_ in _figures(normalize_text(value), split_cells=False)]
+    return [f for f, *_ in _figures(_as_written(value), split_cells=False)]
+
+
+def _as_written(value: str) -> str:
+    """A text value with the model's ISO dates written the way contracts write them."""
+    return _ISO_DATE.sub(lambda m: f"{m[3]}.{m[2]}.{m[1]}", normalize_text(value))
 
 
 def _show(figure: Figure) -> str:
@@ -185,7 +191,7 @@ def check_value_in_quote(value: str, quote: str | None, kind: ValueKind) -> Chec
     quoted_figures = {f for f, *_ in _figures(normalize_text(quote))}
     if missing := [f for f in _value_figures(value, "text") if f not in quoted_figures]:
         return _fail("value_not_in_quote", f"{_show(missing[0])} из значения нет в цитате")
-    tokens = _tokens(value)
+    tokens = _tokens(_as_written(value))
     if not tokens:
         return _ok("value_in_quote")
     quoted = _norm(quote)

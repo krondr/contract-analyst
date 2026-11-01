@@ -178,6 +178,7 @@ def test_numbers_and_dates_of_a_text_value_must_be_on_the_page():
     assert term("штраф 1000 рублей за каждый день просрочки", penalty) == "accepted"
     validity = "Договор действует до «31» декабря 2026 года"
     assert term("действует до 31.12.2026", validity) == "accepted"
+    assert term("действует до 2026-12-31", validity) == "accepted"  # the model may write dates in ISO form
     assert term("действует до 31.12.2027", validity) == "rejected"
 
 
