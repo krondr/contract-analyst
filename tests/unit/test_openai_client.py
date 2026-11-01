@@ -69,7 +69,8 @@ def test_structured_asks_for_the_schema_and_counts_usage_and_truncation():
                                                                          usage={"prompt_tokens": 7, "completion_tokens": 3}))
     assert c.structured(M, Out) == '{"a": 1'
     fmt = bodies[0]["response_format"]
-    assert fmt["type"] == "json_schema" and fmt["json_schema"]["schema"] == Out.model_json_schema()
+    assert fmt["type"] == "json_schema"
+    assert fmt["json_schema"]["schema"] == Out.model_json_schema() | {"additionalProperties": False}
     assert c.usage == {"calls": 1, "input_tokens": 7, "output_tokens": 3, "truncated": 1}
 
 
@@ -133,3 +134,33 @@ def test_factory_passes_the_server_fields_from_settings(tmp_path):
                              openai_think_extra_body={"think": True})
     inner = get_llm_client(settings, tmp_path / "c.sqlite").inner
     assert (inner.extra_body, inner.think_extra_body) == ({"think": False}, {"think": True})
+
+
+def test_structured_schema_is_closed_at_every_level_for_openai():
+    class Inner(BaseModel):
+        value: str | None = None
+
+    class Outer(BaseModel):
+        items: list[Inner] = []
+        note: Inner | None = None
+        by_name: dict[str, Inner] = {}
+
+    bodies = []
+    client(lambda r: bodies.append(json.loads(r.content)) or answer({"content": "{}"})).structured(M, Outer)
+    fmt = bodies[0]["response_format"]["json_schema"]
+    assert fmt["strict"] is False
+
+    def objects(node):
+        if isinstance(node, dict):
+            if "properties" in node:
+                yield node
+            for v in node.values():
+                yield from objects(v)
+        elif isinstance(node, list):
+            for v in node:
+                yield from objects(v)
+
+    found = list(objects(fmt["schema"]))
+    assert len(found) >= 2 and all(o.get("additionalProperties") is False for o in found)
+    by_name = fmt["schema"]["properties"]["by_name"]
+    assert isinstance(by_name["additionalProperties"], dict)  # a map keeps the schema of its values

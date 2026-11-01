@@ -34,6 +34,19 @@ def _to_openai(messages: list[Message]) -> list[dict]:
     return converted
 
 
+def _closed(schema: object) -> object:
+    """The schema with additionalProperties: false on every object that does not set it: OpenAI rejects
+    response_format schemas without it. A map (dict field) keeps the schema of its values."""
+    if isinstance(schema, dict):
+        node = {k: _closed(v) for k, v in schema.items()}
+        if (node.get("type") == "object" or "properties" in node) and "additionalProperties" not in node:
+            node["additionalProperties"] = False
+        return node
+    if isinstance(schema, list):
+        return [_closed(v) for v in schema]
+    return schema
+
+
 def _args(raw: str | dict | None) -> dict:
     if isinstance(raw, dict):
         return raw
@@ -105,5 +118,6 @@ class OpenAICompatClient:
         message = self._complete({"messages": _to_openai(messages), "max_tokens": self.max_tokens, **GREEDY,
                                   **self.extra_body,
                                   "response_format": {"type": "json_schema", "json_schema": {
-                                      "name": schema.__name__, "schema": schema.model_json_schema()}}})
+                                      "name": schema.__name__, "schema": _closed(schema.model_json_schema()),
+                                      "strict": False}}})
         return message.get("content") or ""
