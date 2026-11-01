@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 
-import httpx
 from langgraph.graph import END, START, StateGraph
 
 from contract_analyst.agent import steps
@@ -13,6 +12,7 @@ from contract_analyst.agent.guards import Guard
 from contract_analyst.agent.state import AgentState, PlanOut, ReflectionOut
 from contract_analyst.agent.tools import dispatch, tool_schemas
 from contract_analyst.llm.client import ToolCall
+from contract_analyst.llm.ollama_client import TRANSPORT_ERRORS
 from contract_analyst.llm.prompts import load_prompt
 from contract_analyst.llm.structured import StructuredFailure, call_structured
 from contract_analyst.report.render import ReflectionItem
@@ -23,13 +23,17 @@ REQUIRED_HEADINGS = ["## 1. Сводка запуска", "## 2. Опись до
                      "## 5. Отказы и противоречия", "## 6. Не обработано", "## 7. Reflection"]
 
 
+def _llm_error(exc: Exception) -> str:
+    return f"LLM: {type(exc).__name__}: {exc}"[:300]
+
+
 def safe_structured(ctx: RunContext, node: str, messages, schema):
-    """Structured call where a timeout counts as a failed answer instead of crashing the run."""
+    """Structured call where a timeout or a broken connection counts as a failed answer, not a crash."""
     try:
         return call_structured(ctx.client, messages, schema)
-    except (TimeoutError, httpx.TimeoutException) as exc:
-        ctx.trace.event("error", node, message=f"LLM timeout: {exc}")
-        return StructuredFailure(errors=[f"timeout: {exc}"], raw=[])
+    except TRANSPORT_ERRORS as exc:
+        ctx.trace.event("error", node, message=_llm_error(exc))
+        return StructuredFailure(errors=[_llm_error(exc)], raw=[])
 
 
 def reflect_checklist(ctx: RunContext) -> list[ReflectionItem]:
@@ -89,11 +93,14 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
                                             {"role": "user", "content": inventory}]}
 
     def executor(state: AgentState) -> dict:
+        cut = ctx.client.usage.get("truncated", 0)
         try:
             turn = ctx.client.chat(state["messages"], tool_schemas(), think=ctx.settings.agent_thinking)
-        except (TimeoutError, httpx.TimeoutException) as exc:
-            ctx.trace.event("error", "executor", message=f"LLM timeout: {exc}")
+        except TRANSPORT_ERRORS as exc:  # the run goes on to the reflector, the safety net and the report
+            ctx.trace.event("error", "executor", message=_llm_error(exc))
             return {"messages": [{"role": "assistant", "content": "", "tool_calls": []}]}
+        if ctx.client.usage.get("truncated", 0) > cut:
+            ctx.trace.event("error", "executor", message="llm_truncated: ход оборвался на лимите токенов")
         ctx.trace.event("llm_call", "executor", content=turn.content[:300], reasoning=turn.reasoning,
                         tool_calls=[c.name for c in turn.tool_calls])
         message = {"role": "assistant", "content": turn.content, "tool_calls": [c.model_dump() for c in turn.tool_calls]}

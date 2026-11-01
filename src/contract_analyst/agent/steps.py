@@ -7,19 +7,20 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
-import httpx
-
 from contract_analyst.agent.context import RunContext
 from contract_analyst.analyze.cluster import cluster_contracts, summarize_cluster
 from contract_analyst.assemble.chains import build_chains
 from contract_analyst.assemble.consolidate import consolidate
 from contract_analyst.ingest.inventory import list_inputs
-from contract_analyst.ingest.reader import read_document, rerecognize_pages
+from contract_analyst.ingest.reader import _error, read_document, rerecognize_pages
 from contract_analyst.kb.store import KnowledgeBase
+from contract_analyst.llm.ollama_client import TRANSPORT_ERRORS
 from contract_analyst.models import (
     Decision,
     DocumentRecord,
     DocumentText,
+    InputFile,
+    Issue,
     PageMethod,
     ToolResult,
     ValueStatus,
@@ -88,6 +89,19 @@ def resolve_doc_id(ctx: RunContext, ref: str) -> str | None:
     return None
 
 
+def _read(ctx: RunContext, file: InputFile) -> DocumentText:
+    """One file that cannot be read (OCR engine missing, page rendering failed) must not stop the run."""
+    try:
+        return read_document(file, ctx.ocr_engine, ctx.settings, ctx.read_cache)
+    except Exception as exc:  # noqa: BLE001 — recorded as an unread file with its reason
+        return _error(file, f"read_failed: {type(exc).__name__}: {exc}"[:300])
+
+
+def _llm_failure(exc: Exception) -> str:
+    kind = "llm_timeout" if isinstance(exc, TimeoutError) or "Timeout" in type(exc).__name__ else "llm_error"
+    return f"{kind}: {type(exc).__name__}: {exc}"[:300]
+
+
 def ingest_all(ctx: RunContext) -> ToolResult:
     ctx.inventory = list_inputs(ctx.input_dir)
     if ctx.only_paths is not None:
@@ -100,7 +114,7 @@ def ingest_all(ctx: RunContext) -> ToolResult:
         else:
             todo.append(f)
     with ThreadPoolExecutor(max_workers=4) as pool:
-        docs = list(pool.map(lambda f: read_document(f, ctx.ocr_engine, ctx.settings, ctx.read_cache), todo))
+        docs = list(pool.map(lambda f: _read(ctx, f), todo))
     for doc in docs:
         _register(ctx, doc)
     return ToolResult(status="ok", data=fit({
@@ -121,7 +135,7 @@ def read_one(ctx: RunContext, file_name: str) -> ToolResult:
     match = next((f for f in ctx.inventory if f.name == file_name), None)
     if match is None:
         return ToolResult(status="error", error_type="not_found", hint="Нет такого файла: вызови list_inputs")
-    doc = read_document(match, ctx.ocr_engine, ctx.settings, ctx.read_cache)
+    doc = _read(ctx, match)
     _register(ctx, doc)
     line = doc_line(ctx, doc) if doc.status not in ("error", "empty") else {"file": doc.file.name, "issues": doc.issues}
     if doc.status == "low_quality":
@@ -195,8 +209,8 @@ def analyze_docs(ctx: RunContext, doc_ids: list[str], groups: list[str] | None =
             continue
         try:
             record = understand_document(doc, ctx.headers[doc_id], ctx.client, ctx.settings, groups)
-        except (TimeoutError, httpx.TimeoutException) as exc:
-            _unprocessed(ctx, doc.file.name, f"llm_timeout: {exc}")
+        except TRANSPORT_ERRORS as exc:
+            _unprocessed(ctx, doc.file.name, _llm_failure(exc))
             skipped.append(doc_id)
             continue
         for issue in record.issues:
@@ -239,7 +253,11 @@ def consolidate_all(ctx: RunContext, contract_number: str | None = None, as_of: 
         if ctx.settings.consolidation_mode == "llm":
             from contract_analyst.assemble.merge_llm import consolidate_llm
 
-            result = consolidate_llm(chain, ctx.records, when, ctx.client)
+            try:
+                result = consolidate_llm(chain, ctx.records, when, ctx.client)
+            except TRANSPORT_ERRORS as exc:
+                result = consolidate(chain, ctx.records, when)
+                result.issues.append(Issue(code="llm_merge_failed", message=f"{_llm_failure(exc)}: свёрнуто кодом"))
         else:
             result = consolidate(chain, ctx.records, when)
         results[chain.contract_number] = result
@@ -261,7 +279,8 @@ def cluster_all(ctx: RunContext) -> ToolResult:
     for cluster in clusters:
         try:
             cluster.summary = summarize_cluster(cluster, ctx.consolidated, ctx.client)
-        except (TimeoutError, httpx.TimeoutException):
+        except TRANSPORT_ERRORS as exc:
+            ctx.trace.event("error", "tools", message=_llm_failure(exc))
             cluster.summary = None
     ctx.built("clusters")
     if clusters != ctx.clusters:

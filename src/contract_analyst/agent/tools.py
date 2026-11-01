@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 from contract_analyst.agent import steps
 from contract_analyst.agent.context import INPUTS, PARTS, RunContext
 from contract_analyst.agent.guards import Guard
-from contract_analyst.llm.client import ToolCall
+from contract_analyst.llm.client import ReplayMiss, ToolCall
 from contract_analyst.models import Decision, ToolResult
 
 
@@ -163,6 +163,8 @@ def dispatch(ctx: RunContext, call: ToolCall, guard: Guard, node: str = "tools",
                         args=args.model_dump(exclude={"thought"}, mode="json"))
         try:
             result = spec.fn(ctx, args)
+        except ReplayMiss:
+            raise  # the recording does not match the code: a partial report would hide that
         except Exception as exc:  # noqa: BLE001 — a failing tool must become an observation, not a crash
             ctx.trace.event("error", node, tool=call.name, message=f"{type(exc).__name__}: {exc}"[:300])
             result = ToolResult(status="error", error_type="exception", hint=f"{type(exc).__name__}: {exc}"[:300])
