@@ -63,3 +63,31 @@ def test_chat_eval_scores_facts_refusals_and_refs(tmp_path):
                              AssistantTurn(content="Нет данных в базе знаний.")])
     scores = chat_eval(kb(tmp_path).root, questions, client, load_settings(), tmp_path / "e.sqlite")
     assert scores.accuracy == 1.0 and scores.refusal_precision == 1.0 and scores.with_refs_share == 1.0
+
+
+def _chat_eval(tmp_path, questions, answers):
+    path = tmp_path / "q.yaml"
+    path.write_text(questions, encoding="utf-8")
+    client = ScriptedClient([AssistantTurn(content=a) for a in answers])
+    return chat_eval(kb(tmp_path).root, path, client, load_settings(), tmp_path / "e.sqlite")
+
+
+def test_only_the_refusal_itself_counts_as_a_refusal(tmp_path):
+    scores = _chat_eval(tmp_path, """
+- {id: q1, question: "Какая ставка?", expected_facts: ["500"], unanswerable: false, follow_up_of: null}
+- {id: q2, question: "Кто директор?", expected_facts: [], unanswerable: true, follow_up_of: null}
+- {id: q3, question: "Какой штраф?", expected_facts: [], unanswerable: true, follow_up_of: null}
+""", ["Ставка 500 рублей [doc:m:p1]. Нет данных о НДС.", "Нет данных о директоре, но ставка 500 рублей [doc:m:p1].",
+      "«Нет данных в базе знаний»"])
+    assert scores.accuracy == 2 / 3 and scores.refusal_precision == 1.0 and scores.with_refs_share == 1.0
+
+
+def test_answerable_question_without_facts_is_not_scored(tmp_path):
+    import pytest
+
+    with pytest.warns(UserWarning, match="q1"):
+        scores = _chat_eval(tmp_path, """
+- {id: q1, question: "Что известно?", expected_facts: [], unanswerable: false, follow_up_of: null}
+- {id: q2, question: "Какая ставка?", expected_facts: ["500"], unanswerable: false, follow_up_of: null}
+""", ["Есть договор [doc:m:p1].", "Ставка 700 рублей [doc:m:p1]."])
+    assert scores.accuracy == 0.0 and scores.invalid == ["q1"]
