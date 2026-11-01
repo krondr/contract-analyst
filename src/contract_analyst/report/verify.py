@@ -27,7 +27,7 @@ from contract_analyst.models import (
 )
 from contract_analyst.parsing.patterns import DOC_NUMBER_RE, find_doc_numbers
 
-_BLOCK = re.compile(r"<!-- llm -->(.*?)<!-- /llm -->", re.DOTALL)
+_BLOCK = re.compile(r"<!-- llm( refs)? -->(.*?)<!-- /llm -->", re.DOTALL)
 _REF = re.compile(r"\[doc:[^\]\s]+\]")
 # A possible sentence end: terminal punctuation with the closing quotes and references that belong to the
 # sentence, then whitespace; or a line break. A period inside "3.1" or "01.04.2025" is not followed by a space.
@@ -207,13 +207,14 @@ def verify_text(text: str, sources: Mapping[str, str], require_refs: bool = Fals
 
 
 def verify_claims(markdown: str, sources: Mapping[str, str]) -> tuple[str, int]:
-    """Check every <!-- llm --> block of a rendered report; sources come from grounding()."""
+    """Check every <!-- llm --> block of a rendered report; sources come from grounding(). A <!-- llm refs --> block
+    states facts about the contracts, so a sentence without a reference goes too (spec §6.3)."""
     total = 0
 
     def replace(match: re.Match[str]) -> str:
         nonlocal total
-        text, removed = verify_text(match.group(1), sources)
+        text, removed = verify_text(match.group(2), sources, require_refs=bool(match.group(1)))
         total += removed
-        return f"<!-- llm -->{text}<!-- /llm -->"
+        return f"<!-- llm{match.group(1) or ''} -->{text}<!-- /llm -->"
 
     return _BLOCK.sub(replace, markdown), total

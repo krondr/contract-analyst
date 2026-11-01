@@ -9,8 +9,10 @@ from pathlib import Path
 import jinja2
 from pydantic import BaseModel
 
+from contract_analyst.assemble.consolidate import document_start
 from contract_analyst.labels import KIND_RU, STATUS_RU, TERM_RU, VAT_RU
 from contract_analyst.models import (
+    LLM_FAILURES,
     Cluster,
     ConsolidatedContract,
     ContractChain,
@@ -103,7 +105,7 @@ def _refusals(ctx: ReportContext) -> list[dict]:
                 rows.append({"file": r.file_name, "field": f"ставка «{rate.label}»", "value": amount(rate),
                              "status": rate.status.value, "reason": rate.reason or "", "ref": ref(rate.source)})
         for issue in r.issues:
-            if issue.code in ("llm_invalid_json", "llm_timeout", "llm_truncated"):
+            if issue.code in LLM_FAILURES:
                 rows.append({"file": r.file_name, "field": "ответ модели", "value": "—", "status": issue.code,
                              "reason": issue.message, "ref": ""})
         for op in r.ops:
@@ -119,9 +121,10 @@ def _rate_history(chain: ContractChain, records: dict[str, DocumentRecord]) -> d
         record = records.get(d.doc_id)
         if d.invalidated_by or record is None:
             continue
+        start = chain.main_date.value if d.role == "main" and chain.main_date else document_start(record)
         for rate in record.rates:
             if rate.status == ValueStatus.ACCEPTED:
-                since = f" с {rate.valid_from}" if rate.valid_from else ""
+                since = f" с {rate.valid_from or start}" if rate.valid_from or start else ""
                 history.setdefault(rate.label, []).append(f"{amount(rate)}{since} {ref(rate.source)}")
     return {label: steps for label, steps in history.items() if len(steps) > 1}
 

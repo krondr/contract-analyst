@@ -46,7 +46,7 @@
 {% endif %}
 
 {% if c.summary %}
-<!-- llm -->{{ c.summary }}<!-- /llm -->
+<!-- llm refs -->{{ c.summary }}<!-- /llm -->
 {% endif %}
 
 {% endfor %}
@@ -77,7 +77,7 @@
 {% for name, st in (cc.terms.items() if cc else []) %}
 {% if st.history or st.planned %}
 {% set ns.any = true %}
-- **{{ TERM_RU.get(name, name) }}**: {% for h in st.history %}{{ cell(h.value) }} {{ ref(h.source) }} → {% endfor %}{{ cell(value(st.current)) }} {{ ref(st.current.source) }}{% for p in st.planned %}; запланировано с {{ p.effective_from }}: {{ cell(p.value) }} {{ ref(p.source) }}{% endfor %}
+- **{{ TERM_RU.get(name, name) }}**: {% for h in st.history %}{{ ("с " ~ h.effective_from ~ ": ") if h.effective_from else "" }}{{ cell(h.value) }} {{ ref(h.source) }} → {% endfor %}{{ ("с " ~ st.since ~ ": ") if st.since else "" }}{{ cell(value(st.current)) }} {{ ref(st.current.source) }}{% for p in st.planned %}; запланировано с {{ p.effective_from }}: {{ cell(p.value) }} {{ ref(p.source) }}{% endfor %}
 
 {% endif %}
 {% endfor %}

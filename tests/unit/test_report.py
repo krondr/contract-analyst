@@ -149,7 +149,7 @@ def test_document_and_llm_strings_cannot_open_html_comments():
     ctx.records["m"].terms["penalties"].value = "штраф <!-- 5000"  # would hide the rest of the report
     ctx.clusters[0].summary = "Итог.<!-- /llm --> Ставка 900 руб. <!-- llm -->"  # would escape the check
     md, removed = verify_claims(render_report(ctx), report_sources(ctx))
-    assert md.count("<") == md.count("<!-- llm -->") + md.count("<!-- /llm -->")
+    assert md.count("<") == md.count("<!-- llm") + md.count("<!-- /llm -->")  # <!-- llm --> and <!-- llm refs -->
     assert removed == 1 and "Ставка 900" not in md and "| D990000002-01 [doc:s:p1] |" in md
 
 
@@ -172,3 +172,18 @@ def test_rate_amount_is_printed_with_its_unit():
         return RateRow(label="Ставка", amount=Decimal(value), unit=unit, status=ValueStatus.ACCEPTED)
 
     assert amount(row("120000", "RUB")) == "120 000 руб." and amount(row("60", "%")) == "60 %"
+
+
+def test_term_and_rate_evolution_show_when_each_value_started():
+    evolution = render_report(small_context()).split("#### Эволюция условий")[1].split("####")[0]
+    assert "с 2021-01-21: до 31.12.2025" in evolution and "с 2025-04-01: до 31.12.2026" in evolution
+    assert "100 000 руб. с 2021-01-21" in evolution and "120 000 руб. с 2025-04-01" in evolution
+
+
+def test_cluster_summary_keeps_only_referenced_sentences():
+    ctx = small_context()
+    ctx.clusters[0].summary = "Все договоры кластера расторгнуты. Один договор аренды [doc:s:p1]."
+    md, removed = verify_claims(render_report(ctx), report_sources(ctx))
+    assert "расторгнуты" not in md and "Один договор аренды [doc:s:p1]." in md and removed == 1
+    assert "оставлены обе даты" in md  # the agent's own decisions keep their unreferenced wording
+
