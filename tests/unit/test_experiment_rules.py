@@ -78,3 +78,11 @@ def test_each_golden_date_is_scored_from_its_own_run(tmp_path, monkeypatch):
                          out_dir=tmp_path)
     assert dates == [AS_OF, later] and set(result.runs_at) == {AS_OF, later}
     assert result.scores.consolidation_acc == 0.0
+
+
+def test_e3_and_e4_run_on_the_chosen_model():
+    from contract_analyst.eval.experiments import experiment_specs
+
+    for name in ("e3", "e4"):
+        assert all(s.overrides.get("llm_model") == "openai:m" for s in experiment_specs(name, model="openai:m"))
+    assert all("llm_model" not in s.overrides for s in experiment_specs("e4"))

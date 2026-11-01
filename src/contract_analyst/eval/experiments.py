@@ -109,13 +109,16 @@ def write_experiment_md(name: str, title: str, results: list[VariantResult], rul
     return out
 
 
-def experiment_specs(name: str, models: list[str] | None = None, variants: list[str] | None = None) -> list[VariantSpec]:
+def experiment_specs(name: str, models: list[str] | None = None, variants: list[str] | None = None,
+                     model: str | None = None) -> list[VariantSpec]:
+    """`model` runs e3 and e4 on that model instead of the configured one."""
+    on = {"llm_model": model} if model else {}
     if name == "e2":
         return [VariantSpec(name=m, overrides={"llm_model": m}) for m in (models or ["ollama:qwen3:8b"])]
     if name == "e3":
-        return [VariantSpec(name=mode, overrides={"consolidation_mode": mode}) for mode in ("code", "llm")]
+        return [VariantSpec(name=mode, overrides={"consolidation_mode": mode, **on}) for mode in ("code", "llm")]
     if name == "e4":
-        return [VariantSpec(name=v, variant=v) for v in (variants or ["A", "B", "S"])]
+        return [VariantSpec(name=v, variant=v, overrides=on) for v in (variants or ["A", "B", "S"])]
     raise ValueError(f"unknown experiment {name}")
 
 

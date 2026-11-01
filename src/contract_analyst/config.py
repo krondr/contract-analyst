@@ -60,7 +60,11 @@ class Settings(BaseModel):
 
 
 def load_settings(path: Path | None = None, **overrides) -> Settings:
+    """Defaults, then a deployment file named by CA_CONFIG (kept outside the repo), then the URL variables, then
+    explicit overrides."""
     data = yaml.safe_load((path or DEFAULT_CONFIG).read_text(encoding="utf-8")) or {}
+    if extra := os.environ.get("CA_CONFIG"):
+        data.update(yaml.safe_load(Path(extra).expanduser().read_text(encoding="utf-8")) or {})
     if url := os.environ.get("CA_OLLAMA_URL"):
         data["ollama_url"] = url
     if url := os.environ.get("CA_OPENAI_BASE_URL"):

@@ -42,3 +42,15 @@ def test_langsmith_tracing_is_forced_off_before_langchain_loads():
 def test_env_overrides_ollama_url(monkeypatch):
     monkeypatch.setenv("CA_OLLAMA_URL", "http://127.0.0.1:9")
     assert load_settings().ollama_url == "http://127.0.0.1:9"
+
+
+def test_server_config_file_overrides_the_defaults(tmp_path, monkeypatch):
+    from contract_analyst.config import load_settings
+
+    extra = tmp_path / "server.yaml"
+    extra.write_text("openai_base_url: https://llm.example/v1\nopenai_extra_body: {reasoning: {enabled: false}}\n",
+                     encoding="utf-8")
+    monkeypatch.setenv("CA_CONFIG", str(extra))
+    s = load_settings()
+    assert s.openai_base_url == "https://llm.example/v1" and s.openai_extra_body == {"reasoning": {"enabled": False}}
+    assert s.llm_max_tokens == 4096

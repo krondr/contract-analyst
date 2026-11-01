@@ -154,7 +154,7 @@ def eval_golden(run: Path, golden: Path = Path("data/golden/golden.yaml")) -> No
 
 @app.command()
 def experiment(name: str, data: Path = Path("data/raw"), golden: Path = Path("data/golden/golden.yaml"),
-               as_of: str = "2026-10-30", models: str = "", variants: str = "A,B,S",
+               as_of: str = "2026-10-30", models: str = "", variants: str = "A,B,S", model: str | None = None,
                append: bool = False, out: Path = Path("docs/experiments")) -> None:
     """Замеры: e2 (модели), e3 (свёртка кодом или LLM), e4 (оркестрация)."""
     from datetime import date
@@ -163,7 +163,8 @@ def experiment(name: str, data: Path = Path("data/raw"), golden: Path = Path("da
     from contract_analyst.eval.golden import load_golden
 
     gs = load_golden(golden)
-    specs = ex.experiment_specs(name, models=[m for m in models.split(",") if m], variants=variants.split(","))
+    specs = ex.experiment_specs(name, models=[m for m in models.split(",") if m], variants=variants.split(","),
+                                model=model)
     results = [ex.run_variant(spec, data, gs, date.fromisoformat(as_of)) for spec in specs]
     merged = ex.save_results(name, results, out, append=append)
     title, rule, winner = ex.decide(name, merged)
