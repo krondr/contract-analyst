@@ -60,17 +60,17 @@ def test_terminate_in_future_is_planned():
     assert early.status == "active" and any("запланировано" in e.summary for e in early.timeline)
 
 
-RATES = [("Тариф Макс", 675, date(2026, 7, 1), date(2026, 12, 31)), ("Тариф Макс", 1200, date(2027, 1, 1), None)]
+RATES = [("Пакет Макс", 685, date(2026, 7, 1), date(2026, 12, 31)), ("Пакет Макс", 1250, date(2027, 1, 1), None)]
 
 
 def test_future_rate_is_planned():
     c = run([main(), rec("s", "D990000002-01", parent=MAIN, effective=date(2026, 7, 1), rates=RATES)])
-    assert [r.amount for r in c.rates] == [Decimal(675)] and [r.amount for r in c.planned_rates] == [Decimal(1200)]
+    assert [r.amount for r in c.rates] == [Decimal(685)] and [r.amount for r in c.planned_rates] == [Decimal(1250)]
 
 
 def test_after_change_date_new_rate_current():
     c = run([main(), rec("s", "D990000002-01", parent=MAIN, effective=date(2026, 7, 1), rates=RATES)], date(2027, 2, 1))
-    assert [r.amount for r in c.rates] == [Decimal(1200)] and c.planned_rates == []
+    assert [r.amount for r in c.rates] == [Decimal(1250)] and c.planned_rates == []
 
 
 def test_new_supplement_rate_replaces_same_label():
@@ -167,8 +167,8 @@ def test_operation_end_date_does_not_expire_the_supplement():
     s = rec("s", "D990000002-01", parent=MAIN, effective=date(2026, 7, 1), rates=RATES,
             ops=[(OpType.REPLACE_APPENDIX, "Приложение 7", date(2026, 7, 1))])
     s.ops[0].effective_to = date(2026, 12, 31)
-    c = run([main(rates=[("Тариф Макс", 500, None, None)]), s], date(2027, 2, 1))
-    assert [r.amount for r in c.rates] == [Decimal(1200)]
+    c = run([main(rates=[("Пакет Макс", 500, None, None)]), s], date(2027, 2, 1))
+    assert [r.amount for r in c.rates] == [Decimal(1250)]
 
 
 def test_rate_rows_apply_in_date_order_whatever_the_extraction_order():

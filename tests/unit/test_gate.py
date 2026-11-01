@@ -99,11 +99,11 @@ def test_rate_not_reanchored_when_no_line_has_both(doc):
 
 
 def test_rate_reanchored_in_table_with_cells_on_separate_lines():
-    table = text_doc(["Таблица №1\nСтавка (руб. без НДС) с 01.07.2026\nс 01.01.2027\nТариф Старт\n270\n500\nОптима\n330,5\n500\n"])
-    row = gate_rate(RateOut(label="Оптима", amount="500", valid_from="2027-01-01", page=1,
+    table = text_doc(["Таблица №1\nСтавка (руб. без НДС) с 01.07.2026\nс 01.01.2027\nБазовый\n280\n520\nОптима\n340,5\n520\n"])
+    row = gate_rate(RateOut(label="Оптима", amount="520", valid_from="2027-01-01", page=1,
                             quote="Ставка (руб. без НДС) с 01.07.2026"), table, load_settings())
-    assert row.status == "accepted" and row.source.quote == "Оптима 330,5 500"
-    wrong = gate_rate(RateOut(label="Оптима", amount="270", page=1, quote="Ставка"), table, load_settings())
+    assert row.status == "accepted" and row.source.quote == "Оптима 340,5 520"
+    wrong = gate_rate(RateOut(label="Оптима", amount="280", page=1, quote="Ставка"), table, load_settings())
     assert wrong.status == "rejected"
 
 
@@ -194,12 +194,12 @@ def test_numbers_and_dates_of_a_text_value_must_be_on_the_page():
 
 
 def test_amount_read_from_table_cells_on_one_line_is_conflict():
-    doc = text_doc(["Ставка, руб. без НДС с 01.07.2026 с 01.01.2027\nТариф Старт 270 500\nОптима 330,5 500"])
+    doc = text_doc(["Ставка, руб. без НДС с 01.07.2026 с 01.01.2027\nБазовый 280 520\nОптима 340,5 520"])
     s = load_settings()
-    r = gate_rate(RateOut(label="Тариф Старт", amount="500", valid_from="2027-01-01", page=1, quote="Тариф Старт 270 500"), doc, s)
+    r = gate_rate(RateOut(label="Базовый", amount="520", valid_from="2027-01-01", page=1, quote="Базовый 280 520"), doc, s)
     assert r.status == "conflict" and r.reason.startswith("ambiguous_number")
-    ok = gate_rate(RateOut(label="Оптима", amount="330,5", valid_from="2026-07-01", page=1,
-                           quote="Оптима 330,5 500"), doc, s)
+    ok = gate_rate(RateOut(label="Оптима", amount="340,5", valid_from="2026-07-01", page=1,
+                           quote="Оптима 340,5 520"), doc, s)
     assert ok.status == "accepted"
 
 

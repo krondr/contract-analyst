@@ -108,7 +108,7 @@ def _may_be_cells(text: str, start: int, end: int) -> bool:
 def number_readings(text: str, split_cells: bool = True) -> list[NumberReading]:
     """Amount-like numbers in order, with positions; numeric dates are not counted.
 
-    "1 500 рублей" is one amount. "Тариф Старт 270 500" on a table row may be one amount or two cells: then the
+    "1 500 рублей" is one amount. "Базовый 280 520" on a table row may be one amount or two cells: then the
     grouped reading and each cell are all kept, marked ambiguous, the grouped one first.
     """
     masked = _NUM_DATE_RE.sub(lambda m: " " * len(m.group(0)), text)

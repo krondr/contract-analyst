@@ -44,9 +44,9 @@ def test_parse_money_ru_format():
 
 
 def test_find_numbers_keeps_both_readings_of_space_separated_table_cells():
-    found = find_numbers("Тариф Старт 270 500")
-    assert Decimal(270) in found and Decimal(500) in found and Decimal(270500) in found
-    assert find_numbers("Пакет Мини 675 1000") == [Decimal(675), Decimal(1000)]
+    found = find_numbers("Базовый 280 520")
+    assert Decimal(280) in found and Decimal(520) in found and Decimal(280520) in found
+    assert find_numbers("Пакет Мини 685 1100") == [Decimal(685), Decimal(1100)]
     assert parse_money("1 500 рублей") == Decimal(1500)
 
 
@@ -58,12 +58,12 @@ def test_grouped_number_in_prose_is_one_amount(prose):
 
 
 def test_table_row_cells_on_one_line_are_ambiguous_readings():
-    text = "Тариф Старт 270 500\nОптима 330,5 500"
+    text = "Базовый 280 520\nОптима 340,5 520"
     readings = number_readings(text)
     assert [(r.value, r.ambiguous) for r in readings] == [
-        (Decimal(270500), True), (Decimal(270), True), (Decimal(500), True),
-        (Decimal("330.5"), False), (Decimal(500), False)]
-    assert [text[r.start:r.end] for r in readings] == ["270 500", "270", "500", "330,5", "500"]
+        (Decimal(280520), True), (Decimal(280), True), (Decimal(520), True),
+        (Decimal("340.5"), False), (Decimal(520), False)]
+    assert [text[r.start:r.end] for r in readings] == ["280 520", "280", "520", "340,5", "520"]
 
 
 def test_explicit_cell_separator_keeps_grouped_numbers_whole():
