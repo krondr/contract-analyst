@@ -35,7 +35,8 @@ def stub_understanding(monkeypatch):
 
 
 def run(package, script, tmp_path, **kw):
-    return run_analysis(package, load_settings(), date(2026, 10, 30), client=ScriptedClient(script),
+    return run_analysis(package, kw.pop("settings", load_settings()), date(2026, 10, 30),
+                        client=kw.pop("client", None) or ScriptedClient(script),
                         ocr_engine=kw.pop("ocr", FakeOcrEngine()), out_dir=tmp_path, read_cache=None, **kw)
 
 
@@ -67,6 +68,38 @@ def test_recorded_run_replays_without_misses(tmp_path, fixtures_package):
     second = run_analysis(fixtures_package, load_settings(), date(2026, 10, 30), client=replay,
                           ocr_engine=FakeOcrEngine(), out_dir=tmp_path / "runs", read_cache=None, console=False)
     assert second.run_dir != first.run_dir and replay.hits == recorder.inner.usage["calls"] == 9
+
+
+class Looping:
+    """A model stuck in a loop: every turn it repeats the same call; the reflector always sees gaps."""
+
+    model_name = "looping"
+
+    def __init__(self, turn):
+        self.turn, self.usage = turn, {"calls": 0}
+
+    def chat(self, messages, tools=None, think=False):
+        self.usage["calls"] += 1
+        return self.turn
+
+    def structured(self, messages, schema):
+        self.usage["calls"] += 1
+        return {"PlanOut": '{"items": ["План"]}', "ReflectionOut": '{"goal_met": false, "gaps": ["не всё"]}'}.get(
+            schema.__name__, '{"summary": "Аренда."}')
+
+
+def test_model_looping_on_invalid_calls_is_stopped_and_the_report_written(tmp_path, fixtures_package):
+    r = run(fixtures_package, [], tmp_path, client=Looping(chat(("analyze_document", {}))))
+    errors = [e for e in read_trace(r.trace_path) if e["event"] == "tool_result" and e["status"] == "error"]
+    assert len(errors) == 5 * 2  # the error cap per executor round, two rounds of reflection
+    assert "### D990000001-01" in r.report_path.read_text(encoding="utf-8")
+
+
+def test_recursion_limit_still_ends_in_a_report(tmp_path, fixtures_package):
+    r = run(fixtures_package, [], tmp_path, client=Looping(AssistantTurn(content="Думаю")),
+            settings=load_settings(max_reflection_rounds=1000, max_steps=10))
+    assert any("GraphRecursionError" in str(e.get("message")) for e in read_trace(r.trace_path))
+    assert "### D990000001-01" in r.report_path.read_text(encoding="utf-8")
 
 
 def test_low_quality_scan_triggers_rerecognize_and_refusal_is_reported(tmp_path, fixtures_package):

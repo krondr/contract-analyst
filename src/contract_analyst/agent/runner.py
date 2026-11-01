@@ -8,6 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 
+from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel
 
 from contract_analyst.agent.context import RunContext
@@ -84,8 +85,14 @@ def run_analysis(input_dir: Path, settings: Settings, as_of: date, variant: Lite
         from contract_analyst.agent.graph_full import build_full_agent_graph
 
         graph = build_full_agent_graph(ctx)
-    graph.invoke({"messages": [], "plan": [], "reflection_round": 0, "gaps": []},
-                 config={"recursion_limit": settings.max_steps * 3 + 20})
+    try:
+        graph.invoke({"messages": [], "plan": [], "reflection_round": 0, "gaps": []},
+                     config={"recursion_limit": settings.max_steps * 3 + 20})
+    except GraphRecursionError as exc:  # the graph was cut off: still finish the work and write the report
+        from contract_analyst.agent.graph_hybrid import report
+
+        ctx.trace.event("error", "runner", message=f"GraphRecursionError: {exc}"[:300])
+        report(ctx)
     seconds = round(time.monotonic() - started, 1)
     metrics = {"run_id": run_dir.name, "variant": variant, "as_of": as_of.isoformat(), "seconds": seconds,
                "model": client.model_name, "ocr": f"{ocr_engine.name}/{settings.ocr_preprocess}",

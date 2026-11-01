@@ -57,6 +57,24 @@ def test_bad_args_and_unknown_tool(ctx):
     assert dispatch(ctx, call("format_disk"), Guard(10, 60)).error_type == "unknown_tool"
 
 
+def test_invalid_calls_count_against_the_budget(ctx):
+    guard = Guard(max_steps=2, max_seconds=60)
+    dispatch(ctx, ToolCall(id="x", name="analyze_document", args={}), guard)
+    dispatch(ctx, call("format_disk"), guard)
+    assert dispatch(ctx, call("list_inputs"), guard).error_type == "budget_exceeded"
+
+
+def test_consecutive_errors_stop_the_agent_and_a_success_resets_them(ctx):
+    guard = Guard(max_steps=50, max_seconds=60, max_errors_in_row=3)
+    for _ in range(2):
+        dispatch(ctx, ToolCall(id="x", name="analyze_document", args={}), guard)
+    dispatch(ctx, call("list_inputs"), guard)
+    assert not guard.stuck
+    for _ in range(3):
+        dispatch(ctx, ToolCall(id="x", name="analyze_document", args={}), guard)
+    assert guard.stuck
+
+
 def test_scan_read_returns_low_quality_with_hint(tmp_path, fixtures_package):
     ctx = make_ctx(tmp_path, fixtures_package, ocr=FakeOcrEngine(conf=0.3))
     result = dispatch(ctx, call("read_document", file_name="ДС2 скан.pdf"), Guard(10, 60))

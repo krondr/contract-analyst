@@ -74,7 +74,7 @@ def _inventory_text(ctx: RunContext) -> str:
 
 
 def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
-    guard = Guard(ctx.settings.max_steps, ctx.settings.max_seconds)
+    guard = Guard(ctx.settings.max_steps, ctx.settings.max_seconds, ctx.settings.max_tool_errors_in_row)
 
     def ingest(state: AgentState) -> dict:
         if with_ingest:
@@ -121,7 +121,7 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
         return {"messages": out}
 
     def after_tools(state: AgentState) -> str:
-        return "reflector" if guard.exhausted else "executor"
+        return "reflector" if guard.exhausted or guard.stuck else "executor"
 
     def reflector(state: AgentState) -> dict:
         items = reflect_checklist(ctx)
@@ -132,11 +132,14 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
             {"role": "user", "content": f"Проверки кодом:\n{summary}"}], ReflectionOut)
         llm_gaps = [] if isinstance(verdict, StructuredFailure) else verdict.gaps
         gaps = [f"{i.item}: {i.note}" for i in items if not i.ok] + llm_gaps
+        if guard.stuck:
+            gaps.append(f"{guard.errors_in_row} вызовов подряд закончились ошибкой: прочитай hint и смени вызов")
         round_no = state["reflection_round"] + 1
         ctx.trace.event("reflection", "reflector", round=round_no, items=[i.model_dump() for i in items], gaps=gaps)
         ctx.reflection = items
         update: dict = {"reflection_round": round_no, "gaps": gaps}
         if gaps and round_no < ctx.settings.max_reflection_rounds and not guard.exhausted:
+            guard.errors_in_row = 0  # one fresh chance per round: a model stuck again ends at the reporter
             update["messages"] = [{"role": "user", "content": "Рефлексия: цель ещё не достигнута. Доделай:\n"
                                    + "\n".join(f"- {g}" for g in gaps)}]
         return update
@@ -146,17 +149,7 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
         return "executor" if loop else "reporter"
 
     def reporter(state: AgentState) -> dict:
-        complete_with_code(ctx)
-        ctx.reflection = reflect_checklist(ctx) + [ReflectionItem(
-            item="Шаги, выполненные кодом за агента", ok=not ctx.safety_net,
-            note=", ".join(ctx.safety_net) or "нет — агент выполнил план сам")]
-        steps.write_report(ctx)
-        text = ctx.report_path.read_text(encoding="utf-8")
-        missing = [h for h in REQUIRED_HEADINGS if h not in text]
-        ctx.reflection.append(ReflectionItem(item="Все разделы отчёта на месте", ok=not missing,
-                                             note=", ".join(missing) or "8 разделов"))
-        steps.write_report(ctx)
-        ctx.trace.event("final", "reporter", summary=str(ctx.report_path))
+        report(ctx)
         return {}
 
     graph = StateGraph(AgentState)
@@ -171,6 +164,22 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
     graph.add_conditional_edges("reflector", after_reflector, ["executor", "reporter"])
     graph.add_edge("reporter", END)
     return graph.compile()
+
+
+def report(ctx: RunContext) -> None:
+    """Reporter: code finishes what the agent left undone, then the report is written and checked. The runner also
+    calls it when the graph is cut off, so every run ends in a report."""
+    complete_with_code(ctx)
+    ctx.reflection = reflect_checklist(ctx) + [ReflectionItem(
+        item="Шаги, выполненные кодом за агента", ok=not ctx.safety_net,
+        note=", ".join(ctx.safety_net) or "нет — агент выполнил план сам")]
+    steps.write_report(ctx)
+    text = ctx.report_path.read_text(encoding="utf-8")
+    missing = [h for h in REQUIRED_HEADINGS if h not in text]
+    ctx.reflection.append(ReflectionItem(item="Все разделы отчёта на месте", ok=not missing,
+                                         note=", ".join(missing) or "8 разделов"))
+    steps.write_report(ctx)
+    ctx.trace.event("final", "reporter", summary=str(ctx.report_path))
 
 
 def complete_with_code(ctx: RunContext) -> None:

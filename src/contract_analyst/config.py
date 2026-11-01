@@ -34,6 +34,7 @@ class Settings(BaseModel):
     consolidation_mode: Literal["code", "llm"] = "code"
     max_steps: int = 60
     max_seconds: int = 1800
+    max_tool_errors_in_row: int = 5
     max_reflection_rounds: int = 2
     agent_thinking: bool = True
     subject_categories: dict[str, str] = {}

@@ -23,8 +23,9 @@ low_quality_ratio: 0.2
 
 agent_variant: B                       # E4: A | B | C
 consolidation_mode: code               # E3: code | llm
-max_steps: 60
+max_steps: 60                          # every tool call counts, invalid ones too
 max_seconds: 1800
+max_tool_errors_in_row: 5              # then the agent stops acting and the reflector decides
 max_reflection_rounds: 2
 agent_thinking: true                   # Qwen3 thinking for the executor; it is logged as the agent's thoughts
 

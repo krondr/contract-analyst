@@ -121,11 +121,11 @@ _THOUGHT_PREFIX = re.compile(r"^\s*(?:мысль|thought)\s*[:\-—]\s*", re.IGN
 _REASONING_TAIL = 600
 
 
-def _thought(args: ThoughtArgs, message_text: str, reasoning: str = "") -> tuple[str, str]:
+def _thought(arg: object, message_text: str, reasoning: str = "") -> tuple[str, str]:
     """The model's own words: the thought argument, else the text it wrote next to the calls, else the end of its
     thinking, where it settles on the calls (the whole thinking is in the executor's llm_call event)."""
-    if args.thought.strip():
-        return args.thought.strip(), "argument"
+    if isinstance(arg, str) and arg.strip():
+        return arg.strip(), "argument"
     text = _THOUGHT_PREFIX.sub("", message_text.strip())
     if text:
         return text[:500], "message"
@@ -137,39 +137,43 @@ def _thought(args: ThoughtArgs, message_text: str, reasoning: str = "") -> tuple
 
 def dispatch(ctx: RunContext, call: ToolCall, guard: Guard, node: str = "tools", message_text: str = "",
              reasoning: str = "") -> ToolResult:
-    spec = TOOLS.get(call.name)
-    if spec is None:
-        result = ToolResult(status="error", error_type="unknown_tool", hint=f"Нет инструмента {call.name}")
-        ctx.trace.event("error", node, tool=call.name, message="unknown tool")
-        return result
     if (budget := guard.check_budget()) is not None:
         ctx.trace.event("error", node, tool=call.name, message=budget.hint)
         return budget
+    guard.steps += 1  # every call counts, invalid ones too: a model looping on bad calls must run out of steps
+    thought, source = _thought(call.args.get("thought"), message_text, reasoning)
+    ctx.trace.event("thought", node, tool=call.name, thought=thought, thought_source=source)
+    result = _execute(ctx, call, guard, node, thought, source)
+    guard.record(result)
+    ctx.trace.event("tool_result", node, tool=call.name, status=result.status, error_type=result.error_type,
+                    data=json.dumps(result.data, ensure_ascii=False, default=str)[:500])
+    return result
+
+
+def _execute(ctx: RunContext, call: ToolCall, guard: Guard, node: str, thought: str, source: str) -> ToolResult:
+    spec = TOOLS.get(call.name)
+    if spec is None:
+        ctx.trace.event("error", node, tool=call.name, message="unknown tool")
+        return ToolResult(status="error", error_type="unknown_tool", hint=f"Нет инструмента {call.name}")
     try:
         args = spec.args_model.model_validate(call.args)
     except ValidationError as exc:
         ctx.trace.event("error", node, tool=call.name, message="bad arguments")
         return ToolResult(status="error", error_type="bad_args", hint=f"Неверные аргументы: {str(exc)[:300]}")
-    thought, source = _thought(args, message_text, reasoning)
-    ctx.trace.event("thought", node, tool=call.name, thought=thought, thought_source=source)
     args_key = json.dumps(args.model_dump(exclude={"thought"}), sort_keys=True, default=str)
-    guard.steps += 1
     if guard.seen((call.name, args_key, ctx.revisions(spec.reads))):
-        result = ToolResult(status="error", error_type="repeat_call",
-                            hint="Этот вызов уже был, и данные с тех пор не менялись: смени аргументы "
-                                 "или переходи к следующему шагу")
-    else:
-        ctx.trace.event("tool_call", node, tool=call.name, thought=thought, thought_source=source,
-                        args=args.model_dump(exclude={"thought"}, mode="json"))
-        try:
-            result = spec.fn(ctx, args)
-        except ReplayMiss:
-            raise  # the recording does not match the code: a partial report would hide that
-        except Exception as exc:  # noqa: BLE001 — a failing tool must become an observation, not a crash
-            ctx.trace.event("error", node, tool=call.name, message=f"{type(exc).__name__}: {exc}"[:300])
-            result = ToolResult(status="error", error_type="exception", hint=f"{type(exc).__name__}: {exc}"[:300])
-        # What the call changed itself (list_inputs reading the files) does not make the same call new.
-        guard.seen((call.name, args_key, ctx.revisions(spec.reads)))
-    ctx.trace.event("tool_result", node, tool=call.name, status=result.status, error_type=result.error_type,
-                    data=json.dumps(result.data, ensure_ascii=False, default=str)[:500])
+        return ToolResult(status="error", error_type="repeat_call",
+                          hint="Этот вызов уже был, и данные с тех пор не менялись: смени аргументы "
+                               "или переходи к следующему шагу")
+    ctx.trace.event("tool_call", node, tool=call.name, thought=thought, thought_source=source,
+                    args=args.model_dump(exclude={"thought"}, mode="json"))
+    try:
+        result = spec.fn(ctx, args)
+    except ReplayMiss:
+        raise  # the recording does not match the code: a partial report would hide that
+    except Exception as exc:  # noqa: BLE001 — a failing tool must become an observation, not a crash
+        ctx.trace.event("error", node, tool=call.name, message=f"{type(exc).__name__}: {exc}"[:300])
+        result = ToolResult(status="error", error_type="exception", hint=f"{type(exc).__name__}: {exc}"[:300])
+    # What the call changed itself (list_inputs reading the files) does not make the same call new.
+    guard.seen((call.name, args_key, ctx.revisions(spec.reads)))
     return result
