@@ -36,9 +36,9 @@ from contract_analyst.eval.golden import load_golden
 from contract_analyst.eval.text_metrics import cer, wer
 from contract_analyst.ingest.normalize import normalize_text
 from contract_analyst.models import OcrWord
-from contract_analyst.ocr import OcrEngine, get_ocr_engine, ocr_page
+from contract_analyst.ocr import OcrEngine, get_ocr_engine, ocr_page, orientation
 from contract_analyst.ocr.render import render_page
-from contract_analyst.parsing.patterns import DOC_NUMBER_RE
+from contract_analyst.parsing.patterns import DOC_NUMBER_RE, find_doc_numbers
 
 ENGINES = ("tesseract", "rapidocr")
 MODES = ("none", "deskew_sauvola")
@@ -99,8 +99,10 @@ class BenchRow:
     n_crit_truth: int = 0
     n_doc_numbers: int = 0
     doc_number_recall: float | None = None  # share of true doc numbers read exactly, at any confidence
+    doc_number_recall_parsed: float | None = None  # ... recovered from the OCR text by `find_doc_numbers`
     cer_rotated: float | None = None        # CER on the pages turned by 90 degrees
     rotation_fixed: float | None = None     # share of those pages that `ocr_page` turned back upright
+    upright_kept: float | None = None       # share of upright pages that `ocr_page` left upright
     wer_unordered: float | None = None      # share of reference words missing from the OCR text, order ignored
     real_cer: float | None = None
     real_wer: float | None = None
@@ -347,12 +349,14 @@ class _PageRun:
     ocr_tokens: list[tuple[str, float]]
     truth_tokens: Counter
     seconds: float
-    rotation_ok: bool | None  # None for pages that were not turned by 90 degrees
+    turned: int               # degrees the synthetic page was turned by (0 for upright and real pages)
+    rotation_ok: bool         # `ocr_page` put the page upright again (or left an upright page alone)
     words_missed: int         # reference words absent from the OCR text (multisets, order ignored)
+    parsed_doc_numbers: Counter  # doc numbers `find_doc_numbers` recovers from the OCR text
 
     @property
     def rotated(self) -> bool:
-        return self.rotation_ok is not None
+        return self.turned != 0
 
 
 def _run_page(engine: OcrEngine, mode: str, scan: SyntheticScan) -> _PageRun:
@@ -364,8 +368,9 @@ def _run_page(engine: OcrEngine, mode: str, scan: SyntheticScan) -> _PageRun:
     return _PageRun(cer=cer(hyp, scan.truth), wer=wer(hyp, scan.truth),
                     ref_chars=max(1, len(" ".join(scan.truth.split()))), ref_words=max(1, len(scan.truth.split())),
                     ocr_tokens=critical_words(result.words), truth_tokens=Counter(critical_tokens(scan.truth)),
-                    seconds=seconds, rotation_ok=(turned + result.rotation) % 360 == 0 if turned else None,
-                    words_missed=(Counter(scan.truth.split()) - Counter(hyp.split())).total())
+                    seconds=seconds, turned=turned, rotation_ok=(turned + result.rotation) % 360 == 0,
+                    words_missed=(Counter(scan.truth.split()) - Counter(hyp.split())).total(),
+                    parsed_doc_numbers=Counter(find_doc_numbers(hyp)))
 
 
 def _micro(runs: Sequence[_PageRun]) -> tuple[float, float]:
@@ -378,6 +383,20 @@ def _doc_number_recall(runs: Sequence[_PageRun]) -> float | None:
     pages = [([(t, c) for t, c in r.ocr_tokens if _is_doc_number(t)],
               Counter({t: n for t, n in r.truth_tokens.items() if _is_doc_number(t)})) for r in runs]
     return _point(pages, 0.0).coverage if any(truth for _, truth in pages) else None
+
+
+def _doc_number_recall_parsed(runs: Sequence[_PageRun]) -> float | None:
+    """Like `_doc_number_recall`, but through the production parser, which accepts the usual OCR misreads of D."""
+    total = found = 0
+    for r in runs:
+        truth = Counter({t: n for t, n in r.truth_tokens.items() if _is_doc_number(t)})
+        total += truth.total()
+        found += sum(min(n, r.parsed_doc_numbers[t]) for t, n in truth.items())
+    return found / total if total else None
+
+
+def _share(flags: Sequence[bool]) -> float | None:
+    return sum(flags) / len(flags) if flags else None
 
 
 def _row(engine: str, mode: str, synth: Sequence[_PageRun], real: Sequence[_PageRun],
@@ -403,8 +422,10 @@ def _row(engine: str, mode: str, synth: Sequence[_PageRun], real: Sequence[_Page
         rec_coverage=at_rec.coverage if at_rec else None, rec_precision=at_rec.precision if at_rec else None,
         n_pages=len(synth), n_crit_truth=sum(r.truth_tokens.total() for r in synth),
         n_doc_numbers=sum(n for r in synth for tok, n in r.truth_tokens.items() if _is_doc_number(tok)),
-        doc_number_recall=_doc_number_recall(synth), cer_rotated=_micro(rotated)[0] if rotated else None,
-        rotation_fixed=sum(bool(r.rotation_ok) for r in rotated) / len(rotated) if rotated else None,
+        doc_number_recall=_doc_number_recall(synth), doc_number_recall_parsed=_doc_number_recall_parsed(synth),
+        cer_rotated=_micro(rotated)[0] if rotated else None,
+        rotation_fixed=_share([r.rotation_ok for r in rotated]),
+        upright_kept=_share([r.rotation_ok for r in synth if not r.rotated]),
         wer_unordered=sum(r.words_missed for r in synth) / sum(r.ref_words for r in synth) if synth else None,
         real_cer=real_cer, real_wer=real_wer, real_crit_precision=real_p, real_crit_coverage=real_c,
         n_real_pages=len(real), load_avg=load_avg, curve=curve)
@@ -477,6 +498,10 @@ def _f(x: float | None, digits: int = 3) -> str:
     return "—" if x is None else f"{x:.{digits}f}"
 
 
+def _pct(x: float | None) -> str:
+    return "—" if x is None else f"{x:.0%}"
+
+
 def _version(dist: str) -> str:
     try:
         return importlib.metadata.version(dist)
@@ -527,15 +552,16 @@ def _load() -> str:
 
 
 def run_metadata(scans: Sequence[SyntheticScan], n_docs: int, seed: int, real_pages: int,
-                 seconds_total: float, load_at_start: str = "?") -> dict[str, str]:
+                 seconds_total: float, load_at_start: str = "?", note: str = "") -> dict[str, str]:
     rotated = sum(1 for s in scans if s.meta.get("rot90"))
     return {
         "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "note": note,
         "machine": (f"{platform.system()} {platform.release()} {platform.machine()}, {os.cpu_count()} CPU, "
                     f"Python {platform.python_version()}; load average 1/5/15 мин в начале прогона: {load_at_start}"),
         "tesseract": f"Tesseract {_tesseract_version()} (`rus`, `--psm 6`), pytesseract {_version('pytesseract')}",
-        "rapidocr": (f"RapidOCR {_version('rapidocr')} (PP-OCRv5 mobile: det + eslav rec), "
-                     f"onnxruntime {_version('onnxruntime')}"),
+        "rapidocr": (f"RapidOCR {_version('rapidocr')} (PP-OCRv5 mobile: det + eslav rec, без классификатора "
+                     f"поворота строк), onnxruntime {_version('onnxruntime')}"),
         "libs": f"OpenCV {cv2.__version__}, PyMuPDF {_version('pymupdf')}, NumPy {np.__version__}",
         "weights": _model_weights(),
         "pages": str(len(scans)),
@@ -548,16 +574,72 @@ def run_metadata(scans: Sequence[SyntheticScan], n_docs: int, seed: int, real_pa
 
 
 _CURVE_TS = (0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.99)
+_RUN_RE = re.compile(r"^Прогон: (\d{4}-\d{2}-\d{2} \d{2}:\d{2})", re.MULTILINE)
+_CONFIG_RE = {key: re.compile(rf"^{key}: (\S+)$", re.MULTILINE)
+              for key in ("ocr_engine", "ocr_preprocess", "ocr_word_conf_threshold")}
+_ROW_RE = re.compile(r"^\| `([^`]+)`[^|]* \| `([^`]+)` \| ([\d.]+) \| [\d.]+ \| ([\d.]+) \|", re.MULTILINE)
 
 
-def render_markdown(rows: Sequence[BenchRow], winner: BenchRow, meta: dict[str, str]) -> str:
+@dataclass(frozen=True)
+class PreviousRun:
+    """What an earlier results document said: run time, winner, config threshold, CER and coverage per variant."""
+
+    date: str
+    engine: str
+    mode: str
+    threshold: str
+    rows: dict[tuple[str, str], tuple[float, float]]
+
+
+def read_previous_run(path: Path) -> PreviousRun | None:
+    """Read back the results document written by an earlier run; None if there is none or it cannot be parsed."""
+    try:
+        doc = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    run = _RUN_RE.search(doc)
+    config = {key: rx.search(doc) for key, rx in _CONFIG_RE.items()}
+    if run is None or not all(config.values()):
+        return None
+    rows = {(m.group(1), m.group(2)): (float(m.group(3)), float(m.group(4))) for m in _ROW_RE.finditer(doc)}
+    return PreviousRun(date=run.group(1), engine=config["ocr_engine"].group(1),
+                       mode=config["ocr_preprocess"].group(1), threshold=config["ocr_word_conf_threshold"].group(1),
+                       rows=rows)
+
+
+def _comparison(rows: Sequence[BenchRow], winner: BenchRow, previous: PreviousRun) -> list[str]:
+    threshold = _f(winner.recommended_threshold, 2)
+    if (previous.engine, previous.mode) == (winner.engine, winner.mode):
+        verdict = f"Победитель не изменился: `{winner.engine}` + `{winner.mode}`."
+    else:
+        verdict = (f"Победитель изменился: был `{previous.engine}` + `{previous.mode}`, "
+                   f"стал `{winner.engine}` + `{winner.mode}`.")
+    if previous.threshold == threshold:
+        verdict += f" Порог в конфиг не изменился: {threshold}."
+    else:
+        verdict += f" Порог в конфиг изменился: был {previous.threshold}, стал {threshold}."
+    lines = ["## Сравнение с предыдущим прогоном", "", f"Предыдущий прогон: {previous.date}. {verdict}", ""]
+    shared = [r for r in rows if (r.engine, r.mode) in previous.rows]
+    if shared:
+        lines += ["| Вариант | CER: было → стало | Покрытие при точности ≥ 0.99: было → стало |", "|---|---|---|"]
+        for r in shared:
+            old_cer, old_cov = previous.rows[(r.engine, r.mode)]
+            lines.append(f"| `{r.engine}` + `{r.mode}` | {old_cer:.4f} → {r.cer:.4f} "
+                         f"| {old_cov:.3f} → {r.crit_coverage_at_p99:.3f} |")
+        lines.append("")
+    return lines
+
+
+def render_markdown(rows: Sequence[BenchRow], winner: BenchRow, meta: dict[str, str],
+                    previous: PreviousRun | None = None) -> str:
     rec = winner.recommended_threshold
     first = rows[0] if rows else winner
     lines = [
         "# E1 — выбор OCR-движка по замеру",
         "",
         (f"Прогон: {meta['date']}, длительность {meta['duration']} мин. Команда: "
-         "`uv run python -m contract_analyst.eval.ocr_bench --data data/raw --out docs/experiments/e1_ocr.md`."),
+         "`uv run contract-analyst bench-ocr data/raw --out docs/experiments/e1_ocr.md`."),
+        *([f"Причина прогона: {meta['note']}"] if meta.get("note") else []),
         "Документ содержит только метрики: ни текстов, ни номеров, ни имён файлов (документы конфиденциальны).",
         "",
         "## Варианты",
@@ -616,17 +698,23 @@ def render_markdown(rows: Sequence[BenchRow], winner: BenchRow, meta: dict[str, 
     if rec is None:
         lines += [("Ни один порог на сетке не дал точности ≥ 0.99: порог из конфига не меняется, "
                    "значения из сканов подтверждаются только другими документами."), ""]
-    notes = _observations(rows)
+    if previous is not None:
+        lines += _comparison(rows, winner, previous)
+    notes = _observations(rows, winner)
     if notes:
         lines += ["## Наблюдения", "", *[f"- {note}" for note in notes], ""]
+    n_real = first.n_real_pages
     lines += [
         "## Когда пересмотреть выбор",
         "",
-        ("- Появились расшифровки реальных сканов (Task 17): та же команда добавит их метрики. Если на реальных "
+        (f"- Реальных страниц-сканов с расшифровкой пока {n_real}. Если с новыми расшифровками варианты расположатся "
+         "на них иначе, чем на синтетике, выбор обсуждается заново: правило для такого расхождения заранее не "
+         "записано." if n_real else
+         "- Появились расшифровки реальных сканов (Task 17): та же команда добавит их метрики. Если на реальных "
          "страницах варианты расположатся иначе, выбор обсуждается заново: правило для такого расхождения заранее "
          "не записано."),
-        ("- Исправлены автоповорот или порядок строк, добавлена нормализация номеров документов после OCR: замер "
-         "повторяется с тем же seed (те же страницы и деградации), порог пересчитывается."),
+        ("- Изменились движки, их настройки или `ocr_page` (поворот, порядок строк): замер повторяется с тем же seed "
+         "(те же страницы и деградации), порог пересчитывается."),
         "- Другая машина или ОС: время на страницу нужно перемерить. На выбор оно влияет только при ничьей по правилам 1–2.",
         "",
     ]
@@ -634,12 +722,13 @@ def render_markdown(rows: Sequence[BenchRow], winner: BenchRow, meta: dict[str, 
         "## Диагностика",
         "",
         ("| Вариант | WER | Слова эталона, которых нет в OCR (без учёта порядка) "
-         "| Повёрнутые на 90°: поворот исправлен | CER на них "
-         "| Номера документов прочитаны точно (при любой уверенности) |"),
-        "|---|---|---|---|---|---|",
+         "| Повёрнутые на 90°: поворот исправлен | CER на них | Прямые страницы оставлены прямыми "
+         "| Номера документов при любой уверенности: прочитаны точно / найдены разбором (`find_doc_numbers`) |"),
+        "|---|---|---|---|---|---|---|",
     ]
     lines += [(f"| `{r.engine}` + `{r.mode}` | {r.wer:.4f} | {_f(r.wer_unordered, 4)} | {_f(r.rotation_fixed, 2)} "
-               f"| {_f(r.cer_rotated, 4)} | {_f(r.doc_number_recall)} |") for r in rows]
+               f"| {_f(r.cer_rotated, 4)} | {_f(r.upright_kept, 2)} "
+               f"| {_f(r.doc_number_recall)} / {_f(r.doc_number_recall_parsed)} |") for r in rows]
     lines += [
         "",
         "## Кривая: точность / покрытие принятых критичных токенов",
@@ -661,6 +750,7 @@ def render_markdown(rows: Sequence[BenchRow], winner: BenchRow, meta: dict[str, 
         ]
         lines += [(f"| `{r.engine}` | `{r.mode}` | {_f(r.real_cer, 4)} | {_f(r.real_wer, 4)} "
                    f"| {_f(r.real_crit_precision)} / {_f(r.real_crit_coverage)} |") for r in rows]
+        lines += ["", _real_summary(rows, winner)]
     else:
         lines.append("Ожидается: в `data/golden/golden.yaml` ещё нет расшифровок сканов (`scans`, Task 17). "
                      "Эту часть добавит основная сессия: тот же запуск, когда расшифровки появятся, "
@@ -680,8 +770,12 @@ def render_markdown(rows: Sequence[BenchRow], winner: BenchRow, meta: dict[str, 
          "так читатель растрирует скан низкого разрешения при фиксированном dpi."),
         ("- Эталон — текстовый слой страницы после `normalize_text`; текст OCR нормализуется так же. "
          "CER и WER — `eval.text_metrics` (переводы строк не считаются), по всем страницам с весом длины эталона."),
-        ("- Распознавание — `ocr_page`, как в читателе: с автоповоротом и выбранной предобработкой. "
-         "Время — среднее на страницу после прогрева модели. Варианты чередуются постранично: каждая страница "
+        ("- Распознавание — `ocr_page`, как в читателе: выбранная предобработка, затем ориентация страницы. "
+         f"Сначала Tesseract OSD (если его уверенность ≥ {orientation.OSD_MIN_CONFIDENCE:g}), иначе геометрия рамок "
+         "текста: если большинство рамок выше, чем шире, пробуются повороты на 90° и 270° и остаётся более "
+         "уверенное чтение. У движков без рамок (Tesseract) последний запасной вариант — уверенность распознавания."),
+        ("- Время — среднее на страницу после прогрева модели, вместе с OSD. Варианты чередуются постранично: каждая "
+         "страница "
          "проходит все варианты, и первый вариант каждый раз сдвигается. Поэтому изменение загрузки машины "
          f"влияет на все варианты одинаково. Средняя загрузка (load average за 1 мин) во время замера: {_loads(rows)}."),
         f"- Реальных страниц-сканов с расшифровкой: {meta['real_pages']}.",
@@ -702,16 +796,30 @@ def _loads(rows: Sequence[BenchRow]) -> str:
     return f"{low:.1f}" if round(low, 1) == round(high, 1) else f"{low:.1f}–{high:.1f} по вариантам"
 
 
-def _observations(rows: Sequence[BenchRow]) -> list[str]:
+def _real_summary(rows: Sequence[BenchRow], winner: BenchRow) -> str:
+    """Which variant does best on the real pages, and whether that is the synthetic winner."""
+    scored = [r for r in rows if r.real_cer is not None]
+    by_cer = min(scored, key=lambda r: r.real_cer)
+    covered = [r for r in scored if r.real_crit_coverage is not None]
+    text = f"Меньший CER на реальных страницах — у `{by_cer.engine}` + `{by_cer.mode}` ({by_cer.real_cer:.4f})"
+    if covered:
+        best = max(covered, key=lambda r: r.real_crit_coverage)
+        text += (f"; наибольшее покрытие критичных токенов при пороге конфига — у `{best.engine}` + `{best.mode}` "
+                 f"({best.real_crit_coverage:.3f})")
+        same = (best.engine, best.mode) == (winner.engine, winner.mode)
+        text += ". Это победитель по синтетике." if same else ". Это не победитель по синтетике."
+    return text + " Страниц мало, поэтому это проверка, а не основание для выбора."
+
+
+def _observations(rows: Sequence[BenchRow], winner: BenchRow) -> list[str]:
     """Data-driven remarks for the reader of the results; each one states the numbers it rests on."""
     notes = []
-    recalls = [r.doc_number_recall for r in rows if r.doc_number_recall is not None]
-    if recalls and max(recalls) < 0.5:
+    if winner.doc_number_recall is not None:
         notes.append(
-            f"Номера документов `D…` со сканов плохо читают все варианты: точно прочитано не больше {max(recalls):.0%} "
-            "номеров даже без порога уверенности. Искажённое слово не похоже на номер, поэтому разборщики его не "
-            "примут: номер со скана будет `absent`, а не неверным. Это задача нормализации после OCR, а не выбора "
-            "движка.")
+            f"Номера документов `D…`: у победителя слово с номером прочитано точно в {_pct(winner.doc_number_recall)} "
+            "случаев, без порога уверенности. Метрика критичных токенов здесь консервативна: разбор номеров "
+            "(`parsing/patterns.py`, `_OCR_NUMBER_RE`) принимает D, 0, О, O или Д перед 9 цифрами и -NN и находит "
+            f"{_pct(winner.doc_number_recall_parsed)} номеров.")
     for r in rows:
         name = f"`{r.engine}` + `{r.mode}`"
         defined = [p for p in r.curve if p.precision is not None]
@@ -737,6 +845,8 @@ def _observations(rows: Sequence[BenchRow]) -> list[str]:
             notes.append(
                 f"`{r.engine}` + `{r.mode}`: `ocr_page` вернул в нормальное положение {r.rotation_fixed:.0%} страниц, "
                 f"повёрнутых на 90°; CER на этих страницах {r.cer_rotated:.3f} при среднем {r.cer:.3f}.")
+        if r.upright_kept is not None and r.upright_kept < 1:
+            notes.append(f"`{r.engine}` + `{r.mode}`: `ocr_page` повернул {1 - r.upright_kept:.0%} прямых страниц.")
     return notes
 
 
@@ -763,12 +873,14 @@ def _input_pdfs(data_dir: Path) -> list[Path]:
 
 
 def run_benchmark(data_dir: Path, out: Path, golden: Path | None = None, n_pages: int = 40, seed: int = 0,
-                  engines: Sequence[str] = ENGINES, modes: Sequence[str] = MODES,
+                  engines: Sequence[str] = ENGINES, modes: Sequence[str] = MODES, note: str = "",
                   log: Log | None = None) -> tuple[list[BenchRow], BenchRow]:
-    """Build the synthetic set, score every variant, write the results document; returns rows and winner."""
+    """Build the synthetic set, score every variant, write the results document (compared with the document it
+    replaces, if any); returns rows and winner."""
     from contract_analyst.config import load_settings
 
     started, load_at_start = time.perf_counter(), _load()
+    previous = read_previous_run(out)
     pdfs = _input_pdfs(data_dir)
     scans = make_synthetic_scans(pdfs, n_pages=n_pages, seed=seed)
     golden = golden if golden is not None else data_dir.parent / "golden" / "golden.yaml"
@@ -778,9 +890,9 @@ def run_benchmark(data_dir: Path, out: Path, golden: Path | None = None, n_pages
         log(f"synthetic pages: {len(scans)} from {n_docs} documents; real scanned pages: {len(real)}")
     rows = bench(engines, modes, scans, real, log=log)
     winner = select_winner(rows)
-    meta = run_metadata(scans, n_docs, seed, len(real), time.perf_counter() - started, load_at_start)
+    meta = run_metadata(scans, n_docs, seed, len(real), time.perf_counter() - started, load_at_start, note)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_markdown(rows, winner, meta), encoding="utf-8")
+    out.write_text(render_markdown(rows, winner, meta, previous), encoding="utf-8")
     return rows, winner
 
 
@@ -795,6 +907,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--engines", default=",".join(ENGINES))
     parser.add_argument("--modes", default=",".join(MODES))
+    parser.add_argument("--note", default="", help="why this run was made; goes into the document")
     args = parser.parse_args(argv)
 
     def log(message: str) -> None:
@@ -802,7 +915,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     rows, winner = run_benchmark(args.data, args.out, golden=args.golden, n_pages=args.pages, seed=args.seed,
                                  engines=[e for e in args.engines.split(",") if e],
-                                 modes=[m for m in args.modes.split(",") if m], log=log)
+                                 modes=[m for m in args.modes.split(",") if m], note=args.note, log=log)
     for r in rows:
         print(f"{r.engine:10s} {r.mode:15s} {_row_summary(r)}")
     print(f"winner: {winner.engine} + {winner.mode}; config threshold {_f(winner.recommended_threshold, 2)}")

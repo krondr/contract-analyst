@@ -10,6 +10,7 @@ from contract_analyst.eval.ocr_bench import (
     critical_tokens,
     critical_words,
     make_synthetic_scans,
+    read_previous_run,
     render_markdown,
     run_metadata,
     select_winner,
@@ -125,6 +126,55 @@ def test_bench_interleaves_variants_but_keeps_their_results_apart():
     rows = bench([exact, sloppy], ["none"], [_blank(), _blank(), _blank()], [])
     assert [r.engine for r in rows] == ["echo", "sloppy"]
     assert rows[0].cer == 0.0 and rows[1].cer > 0.0 and rows[1].crit_coverage_at_p99 == 0.0
+
+
+def test_bench_counts_doc_numbers_the_parser_recovers_and_upright_pages_kept():
+    misread = TRUTH.replace("D990000001-01", "Д990000001-01")  # OCR reads the Latin D as a Cyrillic letter
+    (row,) = bench([_EchoEngine(misread, .9)], ["none"], [_blank(), _blank({"rot90": 90})], [])
+    assert row.doc_number_recall == 0.0 and row.doc_number_recall_parsed == 1.0
+    assert row.upright_kept == 1.0 and row.rotation_fixed == 0.0
+
+
+def test_rerun_doc_says_whether_winner_and_threshold_changed(tmp_path):
+    scans = [_blank(), _blank({"rot90": 270})]
+    first = bench([_EchoEngine(TRUTH, .9)], ["none"], scans, [])
+    out = tmp_path / "e1.md"
+    out.write_text(render_markdown(first, select_winner(first), run_metadata(scans, 1, 0, 0, 1.0)), encoding="utf-8")
+    previous = read_previous_run(out)
+    assert (previous.engine, previous.mode, previous.threshold) == ("echo", "none", "0.55")
+    assert previous.rows[("echo", "none")] == (0.0, 1.0)
+    assert read_previous_run(tmp_path / "missing.md") is None
+
+    better = _EchoEngine(TRUTH, .9)
+    better.name = "better"
+    second = bench([_EchoEngine(TRUTH.replace("1500", "1300"), .9), better], ["none"], scans, [])
+    meta = run_metadata(scans, 1, 0, 0, 1.0, note="повтор после исправления поворота")
+    doc = render_markdown(second, select_winner(second), meta, previous=previous)
+    assert "## Сравнение с предыдущим прогоном" in doc and "Причина прогона: повтор после исправления поворота" in doc
+    assert "Победитель изменился: был `echo` + `none`, стал `better` + `none`." in doc
+    assert "Порог в конфиг не изменился: 0.55." in doc
+
+
+def test_bench_ocr_command_passes_options_to_the_benchmark(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from contract_analyst.cli import app
+    from contract_analyst.eval import ocr_bench
+
+    seen = {}
+
+    def fake_run(data_dir, out, **kwargs):
+        seen.update(data_dir=data_dir, out=out, **kwargs)
+        row = BenchRow("rapidocr", "none", .02, .05, .8, .86, 6.5)
+        return [row], row
+
+    monkeypatch.setattr(ocr_bench, "run_benchmark", fake_run)
+    res = CliRunner().invoke(app, ["bench-ocr", str(tmp_path), "--out", str(tmp_path / "e1.md"), "--pages", "4",
+                                   "--engines", "rapidocr", "--modes", "none", "--note", "проверка"])
+    assert res.exit_code == 0, res.output
+    assert (seen["data_dir"], seen["out"], seen["n_pages"], seen["seed"]) == (tmp_path, tmp_path / "e1.md", 4, 0)
+    assert (seen["engines"], seen["modes"], seen["note"], seen["golden"]) == (["rapidocr"], ["none"], "проверка", None)
+    assert "rapidocr + none" in res.output and "ocr_word_conf_threshold: 0.91" in res.output
 
 
 def test_results_doc_has_metrics_only():
