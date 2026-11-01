@@ -466,3 +466,28 @@ def test_document_date_after_a_reference_to_the_document_itself_is_accepted():
     r = apply_gate(Candidate(field="doc_date", value="2026-10-15", kind="date", page=1, quote=quote),
                    text_doc([quote + "\nСтавки вознаграждения"]), load_settings())
     assert r.status == "accepted", r.reason
+
+
+@pytest.mark.parametrize(("quote", "accepted"), [
+    ("Настоящее Дополнительное соглашение действует с 01.07.2026", True),
+    ("Условия настоящего Дополнительного соглашения применяются с 01.07.2026", True),
+    ("Условия, изложенные в настоящем Соглашении, применяются с 01.07.2026", True),
+    ("Дополнить Договор пунктом 5.4 с 01.07.2026", False),
+    ("Пункт 3.1 Договора изложить в следующей редакции с 01.07.2026", False)])
+def test_entry_into_force_is_told_from_an_operation_by_its_verb(quote, accepted):
+    r = apply_gate(Candidate(field="effective_from", value="2026-07-01", kind="date", page=1, quote=quote),
+                   text_doc([f"5. {quote}."]), load_settings())
+    assert (r.status == "accepted") is accepted, r.reason
+    assert accepted or r.reason.startswith("date_role")
+
+
+@pytest.mark.parametrize(("text", "accepted"), [
+    ("1. Дополнить Договор пунктом 5.4 следующего содержания.", True),
+    ("1. Включить в Договор пункт 5.4 следующего содержания.", True),
+    ("1. Пункт 5.4 Договора действует по 31.12.2026 включительно.", False),
+    ("1. Пункт 5.4 Договора применяется в редакции Дополнительного соглашения № 1.", False)])
+def test_add_clause_needs_a_verb_that_adds(text, accepted):
+    quote = text.split(". ", 1)[1].rstrip(".")
+    r = gate_op(OpOut(op="add_clause", target="5.4", page=1, quote=quote), text_doc([text]), load_settings())
+    assert (r.status == "accepted") is accepted, r.reason
+    assert accepted or r.reason.startswith("not_operative")

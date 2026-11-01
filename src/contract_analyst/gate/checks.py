@@ -51,7 +51,8 @@ _OPERATIVE = {
     OpType.REPLACE_CLAUSE: [r"излож\w*|излага\w*|читать|замени\w*|редакци"],
     OpType.RESTATE_SECTION: [r"излож\w*|излага\w*|читать|замени\w*|редакци"],
     OpType.REPLACE_APPENDIX: [r"излож\w*|излага\w*|читать|замени\w*|редакци"],
-    OpType.ADD_CLAUSE: [r"дополни\w*|дополня\w*|добави\w*|включи\w*"],
+    # «Дополнительное соглашение» and «включительно» do not add anything.
+    OpType.ADD_CLAUSE: [r"дополни(?!тельн)\w*|дополня\w*|добави\w*|включи(?!тельн)\w*"],
     OpType.DELETE_CLAUSE: [r"исключи\w*|исключа\w*|утративш\w*\s+силу|утрачива\w*\s+силу|удали\w*"],
 }
 _PERMISSIVE = re.compile(r"\bмо(?:жет|гут)\b|\bвправе\b|\bиме(?:ет|ют)\s+право\b|\bв\s+случа(?:е|ях)\b"
@@ -397,7 +398,8 @@ _START_BEFORE = re.compile(r"(?:\bс|\bсо|вступ\w*\s+в\s+силу(?:\s+�
 _START_CONTEXT = re.compile(r"вступ\w*\s+в\s+силу|распространя\w*|применя\w*\s+с\b|действ\w*\s+с\b")
 _END_BEFORE = re.compile(r"(?:\bдо|\bпо|окончани\w*|истечени\w*|срок\w*\s+действи\w*)\s*[:—-]?\s*$")
 DATE_ROLES = {"doc_date", "effective_from", "effective_to"}
-_OPERATION_VERB = re.compile(r"расторг\w*|прекра[тщ]\w*|приостан\w*|излож\w*|исключ\w*|дополн\w*|отмен\w*")
+# «Дополнительное соглашение действует с», «условия, изложенные в Соглашении» name the document, not an operation.
+_OPERATION_VERB = re.compile(r"расторг\w*|прекра[тщ]\w*|приостан\w*|излож(?!енн)\w*|исключ\w*|дополн(?!ительн)\w*|отмен\w*")
 _IN_FORCE_CUE = re.compile(r"вступ\w*\s+в\s+силу|распространя\w*")
 
 
