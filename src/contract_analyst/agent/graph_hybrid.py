@@ -21,7 +21,9 @@ from contract_analyst.report.render import ReflectionItem
 MANDATORY = ["Каждый файл разобран или отклонён с причиной", "Цепочки договоров собраны",
              "Условия свёрнуты на дату анализа", "Кластеры и сравнение внутри кластеров готовы"]
 REQUIRED_HEADINGS = ["## 1. Сводка запуска", "## 2. Опись документов", "## 3. Кластеры", "## 4. Договоры",
-                     "## 5. Отказы и противоречия", "## 6. Не обработано", "## 7. Reflection"]
+                     "## 5. Отказы и противоречия", "## 6. Не обработано", "## 7. Reflection",
+                     "## 8. Трасса и метрики"]
+KB_ITEM = "Непроверенные значения не записаны в базу знаний"
 
 
 def _llm_error(exc: Exception) -> str:
@@ -41,9 +43,6 @@ def reflect_checklist(ctx: RunContext) -> list[ReflectionItem]:
     scope = [d for d in ctx.documents.values() if ctx.only_doc_ids is None or d.doc_id in ctx.only_doc_ids]
     missing = [d.file.name for d in scope if d.doc_id not in ctx.records]
     unconsolidated = [c.contract_number for c in ctx.chains if c.contract_number not in ctx.consolidated]
-    refused = sum(1 for r in ctx.records.values() for v in [r.number, r.doc_date, r.parent, r.effective_from,
-                                                            *r.terms.values(), *r.rates, *r.ops]
-                  if v.status.value in ("rejected", "conflict", "redacted"))
     stale = " — устарели: исходные данные изменились после сборки"
     chains_stale, consolidated_stale = ctx.stale("chains"), ctx.stale("consolidated")
     clusters_stale = ctx.stale("clusters")
@@ -58,9 +57,18 @@ def reflect_checklist(ctx: RunContext) -> list[ReflectionItem]:
                        else f"на {ctx.as_of}" + (stale if consolidated_stale else "")),
         ReflectionItem(item=MANDATORY[3], ok=not ctx.consolidated or (bool(ctx.clusters) and not clusters_stale),
                        note=f"кластеров: {len(ctx.clusters)}" + (stale if ctx.clusters and clusters_stale else "")),
-        ReflectionItem(item="Непроверенные значения не записаны в базу знаний", ok=True,
-                       note=f"отклонено или спорно: {refused} — показаны в разделе 5"),
     ]
+
+
+def kb_check(ctx: RunContext) -> ReflectionItem:
+    """Checked on the knowledge base as written, so call it after write_report. Not a gap for the agent: only code
+    decides what is stored."""
+    refused = sum(1 for r in ctx.records.values() for v in [r.number, r.doc_date, r.parent, r.effective_from,
+                                                            *r.terms.values(), *r.rates, *r.ops]
+                  if v.status.value in ("rejected", "conflict", "redacted"))
+    leaks = steps.unverified_in_kb(ctx.run_dir / "kb")
+    return ReflectionItem(item=KB_ITEM, ok=not leaks, note=f"в базе знаний: {', '.join(leaks[:5])}" if leaks
+                          else f"отклонено или спорно: {refused} — показаны в разделе 5")
 
 
 def _inventory_text(ctx: RunContext) -> str:
@@ -87,7 +95,8 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
         prompt = load_prompt("planner")
         plan = safe_structured(ctx, "planner", [{"role": "system", "content": prompt.render(as_of=ctx.as_of)},
                                                 {"role": "user", "content": inventory}], PlanOut)
-        items = (plan.items if not isinstance(plan, StructuredFailure) else []) + MANDATORY
+        ctx.plan = plan.items if not isinstance(plan, StructuredFailure) else []
+        items = ctx.plan + MANDATORY
         ctx.trace.event("plan", "planner", items=items)
         system = load_prompt("executor").render(as_of=ctx.as_of, plan=items, with_ingest=with_ingest)
         return {"plan": items, "messages": [{"role": "system", "content": system},
@@ -132,6 +141,7 @@ def build_hybrid_graph(ctx: RunContext, with_ingest: bool = True):
             {"role": "system", "content": prompt.render(plan=state["plan"])},
             {"role": "user", "content": f"Проверки кодом:\n{summary}"}], ReflectionOut)
         llm_gaps = [] if isinstance(verdict, StructuredFailure) else verdict.gaps
+        ctx.plan_checks = {} if isinstance(verdict, StructuredFailure) else {c.n: c for c in verdict.items}
         gaps = [f"{i.item}: {i.note}" for i in items if not i.ok] + llm_gaps
         if guard.stuck:
             gaps.append(f"{guard.errors_in_row} вызовов подряд закончились ошибкой: прочитай hint и смени вызов")
@@ -171,13 +181,17 @@ def report(ctx: RunContext) -> None:
     """Reporter: code finishes what the agent left undone, then the report is written and checked. The runner also
     calls it when the graph is cut off, so every run ends in a report."""
     complete_with_code(ctx)
+    steps.write_report(ctx)  # writes the knowledge base the checklist reads
     found, total = thought_counts(read_trace(ctx.trace.path))
-    ctx.reflection = reflect_checklist(ctx) + [
+    checks = {n: ctx.plan_checks.get(n) for n in range(1, len(ctx.plan) + 1)}
+    ctx.reflection = [  # the planner's own items, as the reflector (LLM) judged them
+        ReflectionItem(item=item, ok=bool(checks[n] and checks[n].done),
+                       note=f"рефлектор (LLM): {checks[n].note or '—'}" if checks[n] else "рефлектор не оценил пункт")
+        for n, item in enumerate(ctx.plan, start=1)] + reflect_checklist(ctx) + [kb_check(ctx),
         ReflectionItem(item="Шаги, выполненные кодом за агента", ok=not ctx.safety_net,
                        note=", ".join(ctx.safety_net) or "нет — агент выполнил план сам"),
         ReflectionItem(item="Мысль записана у каждого вызова инструмента", ok=found == total,
                        note=f"{found} из {total}" if total else "вызовов инструментов не было")]
-    steps.write_report(ctx)
     text = ctx.report_path.read_text(encoding="utf-8")
     missing = [h for h in REQUIRED_HEADINGS if h not in text]
     ctx.reflection.append(ReflectionItem(item="Все разделы отчёта на месте", ok=not missing,

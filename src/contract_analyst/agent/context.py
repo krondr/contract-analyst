@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+from contract_analyst.agent.state import PlanCheck
 from contract_analyst.agent.trace import TraceLogger
 from contract_analyst.config import Settings
 from contract_analyst.llm.client import LLMClient
@@ -49,6 +50,8 @@ class RunContext:
     decisions: list[Decision] = field(default_factory=list)
     unprocessed: list[dict] = field(default_factory=list)
     reflection: list[ReflectionItem] = field(default_factory=list)
+    plan: list[str] = field(default_factory=list)  # the planner's own items, without the mandatory ones
+    plan_checks: dict[int, PlanCheck] = field(default_factory=dict)  # the reflector's verdict by item number
     only_doc_ids: set[str] | None = None
     only_paths: set[str] | None = None
     safety_net: list[str] = field(default_factory=list)

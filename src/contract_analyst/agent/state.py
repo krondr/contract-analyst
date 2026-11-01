@@ -21,6 +21,13 @@ class PlanOut(BaseModel):
     items: list[str]
 
 
+class PlanCheck(BaseModel):
+    n: int  # the item's number in the plan
+    done: bool
+    note: str = ""
+
+
 class ReflectionOut(BaseModel):
     goal_met: bool
     gaps: list[str] = []
+    items: list[PlanCheck] = []

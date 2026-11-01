@@ -343,6 +343,26 @@ def record_decision(ctx: RunContext, decision: Decision) -> ToolResult:
     return ToolResult(status="ok", data={"decisions": len(ctx.decisions)})
 
 
+def unverified_in_kb(kb_dir: Path) -> list[str]:
+    """Where the written knowledge base holds a value the gate refused (rejected or redacted). A field keeps its
+    status with the value scrubbed; a refused rate or operation must not be stored at all."""
+    leaks: list[str] = []
+
+    def walk(node, where: str) -> None:
+        if isinstance(node, dict):
+            if node.get("status") in ("rejected", "redacted") and node.get("value", node) is not None:
+                leaks.append(where)
+            for key, child in node.items():
+                walk(child, f"{where}.{key}")
+        elif isinstance(node, list):
+            for i, child in enumerate(node):
+                walk(child, f"{where}[{i}]")
+
+    for path in sorted(kb_dir.glob("*.json")):
+        walk(json.loads(path.read_text(encoding="utf-8")), path.stem)
+    return leaks
+
+
 def write_report(ctx: RunContext) -> ToolResult:
     valid = {f"doc:{d.doc_id}:p{p.number}" for d in ctx.documents.values() for p in d.pages}
     report_ctx = ReportContext(
