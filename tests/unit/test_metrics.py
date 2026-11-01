@@ -179,6 +179,28 @@ def test_contract_the_run_did_not_fold_is_not_refolded_by_code(tmp_path):
     assert {t.trap_id: t.passed for t in check_traps(run, golden())}["T5"] is False
 
 
+def test_latest_full_run_skips_partial_and_unfinished_runs(tmp_path):
+    import json
+
+    from contract_analyst.eval.metrics import latest_full_run
+
+    def run(name, scope=None, finished=True):
+        (tmp_path / name / "kb").mkdir(parents=True)
+        if finished:
+            (tmp_path / name / "metrics.json").write_text(json.dumps({} if scope is None else {"scope": scope}))
+        return tmp_path / name
+
+    full = {"chain": None, "doc": None}
+    run("20261030-090000-B", full)
+    newest_full = run("20261030-100000-B", full)
+    run("20261030-110000-B", {"chain": MAIN, "doc": None})
+    run("20261030-120000-B", {"chain": None, "doc": "ДС1.pdf"})
+    run("20261030-130000-B", full, finished=False)  # still running: metrics.json is written last
+    run("20261030-140000-B")  # written before runs recorded their scope
+    assert latest_full_run(tmp_path) == newest_full
+    assert latest_full_run(tmp_path / "missing") is None
+
+
 def test_values_the_fold_did_not_accept_score_nothing(tmp_path):
     from pydantic import TypeAdapter
 

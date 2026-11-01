@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from contract_analyst.eval.golden import load_golden
-from contract_analyst.eval.metrics import score_run
+from contract_analyst.eval.metrics import latest_full_run, score_run
 from contract_analyst.eval.traps import check_traps
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,10 +17,9 @@ pytestmark = [pytest.mark.real, pytest.mark.skipif(not GOLDEN.exists(), reason="
 def final_run() -> Path:
     if run := os.environ.get("CA_FINAL_RUN"):
         return Path(run)
-    runs = sorted(p for p in (ROOT / "runs").glob("*") if (p / "kb").exists())
-    if not runs:
-        pytest.skip("no finished run in runs/")
-    return runs[-1]
+    if (run := latest_full_run(ROOT / "runs")) is None:
+        pytest.skip("no finished full run in runs/ (a --chain or --doc run does not count); set CA_FINAL_RUN")
+    return run
 
 
 def test_all_traps_pass_on_final_run():

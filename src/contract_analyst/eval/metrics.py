@@ -286,6 +286,19 @@ def _usage(run_dir: Path) -> dict:
     return metrics
 
 
+def latest_full_run(runs_dir: Path) -> Path | None:
+    """The newest finished run over the whole package. metrics.json is written last, so a run without it is still
+    going or crashed; its scope says whether --chain or --doc limited the run (older runs did not record it)."""
+    for run in sorted(Path(runs_dir).glob("*"), reverse=True):
+        try:
+            scope = json.loads((run / "metrics.json").read_text(encoding="utf-8")).get("scope")
+        except (OSError, ValueError):
+            continue
+        if (run / "kb").is_dir() and scope == {"chain": None, "doc": None}:
+            return run
+    return None
+
+
 def score_run(run_dir: Path, golden: GoldenSet, runs_at: dict[date, Path] | None = None) -> Scores:
     """Score a run; runs_at gives the run made for each golden date (an experiment runs every variant per date)."""
     from contract_analyst.eval.traps import check_traps
@@ -317,4 +330,5 @@ def score_run(run_dir: Path, golden: GoldenSet, runs_at: dict[date, Path] | None
         tool_call_valid_rate=usage["tool_call_valid_rate"], safety_net=usage.get("safety_net", []))
 
 
-__all__ = ["GoldenRate", "RunsAt", "Scores", "normalize_target", "same_value", "score_run", "similar_text"]
+__all__ = ["GoldenRate", "RunsAt", "Scores", "latest_full_run", "normalize_target", "same_value", "score_run",
+           "similar_text"]

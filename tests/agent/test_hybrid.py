@@ -54,6 +54,7 @@ def test_hybrid_produces_report_and_thought_for_every_call(tmp_path, fixtures_pa
     assert [e["event"] for e in trace].count("plan") == 1
     metrics = json.loads((r.run_dir / "metrics.json").read_text())
     assert metrics["variant"] == "B" and metrics["safety_net"] == []
+    assert metrics["scope"] == {"chain": None, "doc": None}
 
 
 def test_low_quality_scan_triggers_rerecognize_and_refusal_is_reported(tmp_path, fixtures_package):
@@ -89,6 +90,7 @@ def test_only_chain_limits_analysis(tmp_path, fixtures_package):
               '{"goal_met": true, "gaps": []}', chat(content="Готово"), '{"goal_met": true, "gaps": []}',
               '{"summary": "Аренда."}']
     r = run(package, script, tmp_path, only_chain=MAIN)
+    assert json.loads((r.run_dir / "metrics.json").read_text())["scope"] == {"chain": MAIN, "doc": None}
     result = next(e for e in read_trace(r.trace_path) if e["event"] == "tool_result" and e["tool"] == "analyze_document")
     assert "skipped" in result["data"] and "Другой" not in r.report_path.read_text(encoding="utf-8").split("## 4.")[1]
 
