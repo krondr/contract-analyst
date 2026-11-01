@@ -202,6 +202,7 @@ def _vat_said(quote: str, page: Page) -> set[str]:
 
 _PENALTY = re.compile(r"штраф|пен[яиь]|неустойк", re.IGNORECASE)
 _PRICE = re.compile(r"вознагражд|ставк|цен[аы]|стоимост|плат[аы]|тариф|оплат", re.IGNORECASE)
+_PERCENT_AFTER = r"\s*(?:\([^)]{0,80}\)\s*)?(?:%|процент)"  # «60%», «60 (шестьдесят) процентов»
 
 
 def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
@@ -213,7 +214,7 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
             row = row.model_copy(update={"quote": places[0]})
     valid_from, valid_to = _iso(row.valid_from), _iso(row.valid_to)
     percent = "%" in row.amount or bool(amount is not None and re.search(
-        rf"(?<![\d,.]){re.escape(row.amount.strip().rstrip('%').strip())}\s*(?:%|процент)", row.quote or ""))
+        rf"(?<![\d,.]){re.escape(row.amount.strip().rstrip('%').strip())}{_PERCENT_AFTER}", row.quote or ""))
     base = {"label": row.label, "amount": amount if amount is not None else 0, "vat": row.vat,
             "unit": "%" if percent else "RUB",
                 "valid_from": valid_from if isinstance(valid_from, date) else None,

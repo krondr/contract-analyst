@@ -539,3 +539,13 @@ def test_vat_not_included_is_read_as_excluded(sentence, vat):
     r = gate_rate(RateOut(label="Арендная плата", amount="120 000", vat="excluded", page=1, quote=sentence),
                   text_doc([f"3.1. {sentence}."]), load_settings())
     assert (r.status, r.vat) == ("accepted", vat)
+
+
+@pytest.mark.parametrize(("sentence", "amount", "unit"), [
+    ("Вознаграждение Агента составляет 60 (шестьдесят) процентов от суммы платежей", "60", "%"),
+    ("Вознаграждение Агента составляет 60 (шестьдесят) % от суммы платежей", "60", "%"),
+    ("Вознаграждение Агента составляет 1 500 (одна тысяча пятьсот) рублей за абонента", "1 500", "RUB")])
+def test_percent_written_with_the_amount_in_words_keeps_its_unit(sentence, amount, unit):
+    r = gate_rate(RateOut(label="Вознаграждение Агента", amount=amount, page=1, quote=sentence),
+                  text_doc([f"4.1. {sentence}."]), load_settings())
+    assert (r.status, r.unit) == ("accepted", unit)
