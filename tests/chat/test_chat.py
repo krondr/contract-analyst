@@ -87,6 +87,18 @@ def test_date_the_user_asked_about_frames_the_answer(tmp_path):
     assert session.ask(question, thread="t9") == "Нет данных в базе знаний."  # "с 30.10.2026" is a claim
 
 
+def test_memory_keeps_only_what_the_user_saw(tmp_path):
+    client = ScriptedClient([call("get_contract_terms", contract_number=MAIN),
+                             AssistantTurn(content="Ставка составляет 900 рублей."),
+                             AssistantTurn(content="Да, договор расторгнут.")])
+    session = ChatSession(kb(tmp_path), client, load_settings(), tmp_path / "chat.sqlite")
+    assert session.ask("Какая ставка?", "t10") == "Нет данных в базе знаний."
+    session.ask("А он расторгнут?", "t10")
+    context = client.calls[2]["messages"][1:]
+    assert [(m["role"], m["content"]) for m in context] == [
+        ("user", "Какая ставка?"), ("assistant", "Нет данных в базе знаний."), ("user", "А он расторгнут?")]
+
+
 def test_tools_cite_status_documents_and_contracts(tmp_path):
     base = kb(tmp_path)
     terms = json.loads(run_chat_tool(base, "get_contract_terms", {"contract_number": MAIN}))
