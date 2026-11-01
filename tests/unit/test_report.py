@@ -68,6 +68,22 @@ def test_invalid_ref_removed():
     assert removed == 1 and "2026" not in out
 
 
+def test_abbreviations_decimals_and_dates_do_not_split_a_sentence():
+    for text in [("120 000 руб. в месяц без НДС, действует с 01.04.2025 по дополнительному соглашению "
+                  "D990100002-01 [doc:abc:p1]."),
+                 "Ставка по п. 3.1 составляет 700 руб. без НДС [doc:abc:p1].",
+                 "Сумма 1 500,50 руб., т.е. 1 тыс. 500 руб. 50 коп., см. пп. 2.1.1 и ст. 450 ГК РФ [doc:abc:p1].",
+                 "Договор подписали Иванов И. И. и Петров П. П. в г. Тверь 01.03.2025 г. [doc:abc:p1].",
+                 "1. Ставка 700 руб. [doc:abc:p1]\n2. Срок до 31.12.2026 [doc:abc:p1]"]:
+        block = f"<!-- llm -->{text}<!-- /llm -->"
+        assert verify_claims(block, {"doc:abc:p1"}) == (block, 0), text
+
+
+def test_sentence_ends_after_an_abbreviation_before_a_capital():
+    md = "<!-- llm -->Ставка 900 руб. Срок до 2027 г. Договор действует [doc:abc:p1].<!-- /llm -->"
+    assert verify_claims(md, {"doc:abc:p1"}) == ("<!-- llm -->Договор действует [doc:abc:p1].<!-- /llm -->", 2)
+
+
 def test_text_outside_llm_blocks_untouched():
     out, removed = verify_claims("| Ставка | 900 |\n<!-- llm -->Без чисел.<!-- /llm -->", set())
     assert removed == 0 and "| Ставка | 900 |" in out
