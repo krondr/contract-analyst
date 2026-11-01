@@ -26,20 +26,30 @@ class VariantResult(BaseModel):
     spec: VariantSpec
     scores: Scores
     run_dir: Path
+    runs_at: dict[date, Path] = {}
+
+
+def _run_once(spec: VariantSpec, settings, data_dir: Path, as_of: date, out_dir: Path, run_kwargs: dict) -> Path:
+    if spec.variant == "S":
+        from contract_analyst.agent.single_call import run_single_call
+
+        return run_single_call(data_dir, settings, as_of, out_dir, **run_kwargs).run_dir
+    from contract_analyst.agent.runner import run_analysis
+
+    return run_analysis(data_dir, settings, as_of, spec.variant, out_dir=out_dir, console=False, **run_kwargs).run_dir
 
 
 def run_variant(spec: VariantSpec, data_dir: Path, golden: GoldenSet, as_of: date,
                 out_dir: Path = Path("runs/experiments"), **run_kwargs) -> VariantResult:
+    """Run the variant once per golden date and score each date from its own run: an LLM or single-call fold made
+    at one date says nothing about another. Extraction is cached, so the extra runs are cheap. Everything that does
+    not depend on the date (values, chains, clusters, time, calls) comes from the run at as_of."""
     settings = load_settings(**spec.overrides)
-    if spec.variant == "S":
-        from contract_analyst.agent.single_call import run_single_call
-
-        result = run_single_call(data_dir, settings, as_of, out_dir, **run_kwargs)
-    else:
-        from contract_analyst.agent.runner import run_analysis
-
-        result = run_analysis(data_dir, settings, as_of, spec.variant, out_dir=out_dir, console=False, **run_kwargs)
-    return VariantResult(spec=spec, scores=score_run(result.run_dir, golden), run_dir=result.run_dir)
+    runs = {when: _run_once(spec, settings, data_dir, when, out_dir, run_kwargs)
+            for when in dict.fromkeys([as_of, *golden.as_of_dates])}
+    runs_at = {when: runs[when] for when in golden.as_of_dates}
+    return VariantResult(spec=spec, scores=score_run(runs[as_of], golden, runs_at), run_dir=runs[as_of],
+                         runs_at=runs_at)
 
 
 COLUMNS = [("Неверных принятых", "critical_accepted_wrong", "{}"), ("Доля принятых верных", "critical_coverage", "{:.2f}"),
@@ -92,6 +102,8 @@ def write_experiment_md(name: str, title: str, results: list[VariantResult], rul
     lines += ["Метаданные:", f"- git: `{_git_sha()}`", f"- модель первого прогона: `{meta.get('model', '—')}`",
               f"- OCR: `{meta.get('ocr', '—')}`", f"- версии промптов: `{meta.get('prompt_versions', {})}`",
               f"- дата свёртки: `{meta.get('as_of', '—')}`"]
+    if dates := sorted({when for r in results for when in r.runs_at}):
+        lines.append(f"- даты эталона: {', '.join(map(str, dates))}, каждая оценена по своему прогону")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return out

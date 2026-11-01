@@ -91,7 +91,8 @@ def run_analysis(input_dir: Path, settings: Settings, as_of: date, variant: Lite
                "model": client.model_name, "ocr": f"{ocr_engine.name}/{settings.ocr_preprocess}",
                "prompt_versions": prompt_versions(), "llm_usage": dict(client.usage),
                "cache_hits": getattr(client, "hits", 0), "documents": len(ctx.documents),
-               "unprocessed": len(ctx.unprocessed), "removed_claims": ctx.removed_claims, "safety_net": ctx.safety_net}
+               "unprocessed": len(ctx.unprocessed), "removed_claims": ctx.removed_claims, "safety_net": ctx.safety_net,
+               "scope": {"chain": only_chain, "doc": str(only_doc) if only_doc else None}}
     (run_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=1), encoding="utf-8")
     return RunResult(run_dir=run_dir, report_path=ctx.report_path, kb_dir=run_dir / "kb", trace_path=trace.path,
                      variant=variant, seconds=seconds, llm_usage=dict(client.usage))

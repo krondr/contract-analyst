@@ -30,7 +30,7 @@ def test_yaml_roundtrip_keeps_dates_and_decimals(tmp_path):
 
 
 from contract_analyst.eval.golden import GoldenDocument, GoldenTrap, GoldenValue
-from contract_analyst.eval.golden_tools import build_review_page, check_golden, diff_golden
+from contract_analyst.eval.golden_tools import build_review_page, check_golden, diff_golden, fold_mismatches
 
 PAGE = "Договор № D990000001-01\nг. Тверь 19.08.2020 г.\nСтавка составляет 500 рублей без НДС."
 
@@ -64,6 +64,17 @@ def test_diff_tolerates_paraphrased_terms():
     assert not [d for d in diff_golden(a, b) if "terms" in d.path]
 
 
+def test_diff_flags_terms_that_differ_in_a_date_or_a_key_word():
+    def gs(validity, payment):
+        return _gs(documents=[_gdoc(terms={"validity": GoldenValue(value=validity),
+                                           "payment_terms": GoldenValue(value=payment)})])
+
+    a = gs("действует до 31 декабря 2026 года", "оплата ежемесячно до 10 числа")
+    b = gs("действует до 31 декабря 2025 года", "оплата ежеквартально до 10 числа")
+    assert {d.path for d in diff_golden(a, b)} == {"documents[d1].terms.validity", "documents[d1].terms.payment_terms"}
+    assert not diff_golden(a, gs("действует до 31.12.2026", "ежемесячная оплата до 10 числа"))
+
+
 def test_check_passes_consistent_set():
     assert check_golden(_gs(), {"d1": text_doc([PAGE], doc_id="d1")}) == []
 
@@ -74,10 +85,38 @@ def test_check_catches_missing_quote():
     assert any("quote" in e and "city" in e for e in errors)
 
 
-def test_check_catches_consolidation_mismatch():
+def test_fold_mismatch_needs_adjudication_and_is_not_an_error():
     wrong = _gs()
     wrong.chains[0].rates_at[date(2026, 10, 30)] = [GoldenRate(label="Ставка", amount=Decimal(900))]
-    assert any("rates_at" in e for e in check_golden(wrong, {"d1": text_doc([PAGE], doc_id="d1")}))
+    assert check_golden(wrong, {"d1": text_doc([PAGE], doc_id="d1")}) == []
+    (item,) = fold_mismatches(wrong)
+    assert item.startswith("chains[D990000001-01].rates_at[2026-10-30]") and "900" in item and "500" in item
+    assert fold_mismatches(_gs()) == []
+
+
+def test_check_catches_chain_number_no_document_has():
+    typo = _gs(chains=[_gs().chains[0].model_copy(update={"contract_number": "D990000777-01"})])
+    errors = check_golden(typo, {"d1": text_doc([PAGE], doc_id="d1")})
+    assert errors == ["chains[D990000777-01]: no document in order has this number or refers to it"]
+
+
+def _cli_check(tmp_path, monkeypatch, gs):
+    from typer.testing import CliRunner
+
+    from contract_analyst import cli
+
+    monkeypatch.setattr(cli, "_read_all", lambda data: [text_doc([PAGE], doc_id="d1")])
+    dump_golden(gs, tmp_path / "g.yaml")
+    return CliRunner().invoke(cli.app, ["golden", "check", str(tmp_path / "g.yaml"), "--data", str(tmp_path)])
+
+
+def test_cli_golden_check_fails_only_on_errors(tmp_path, monkeypatch):
+    wrong = _gs()
+    wrong.chains[0].rates_at[date(2026, 10, 30)] = [GoldenRate(label="Ставка", amount=Decimal(900))]
+    res = _cli_check(tmp_path, monkeypatch, wrong)
+    assert res.exit_code == 0 and "needs adjudication: chains[D990000001-01].rates_at[2026-10-30]" in res.output
+    bad = _gs(documents=[_gdoc(city=GoldenValue(value="Псков", page=1, quote="г. Псков"))])
+    assert _cli_check(tmp_path, monkeypatch, bad).exit_code == 1
 
 
 def test_check_requires_traps():
@@ -119,3 +158,39 @@ def test_golden_values_carry_the_clause_they_quote():
                                                             quote="Уведомления направляются по факсу.")})
     record = _to_record(gdoc, text_doc([page], doc_id="d1"))
     assert record.terms["notification_channel"].source.clause_id == "12.1"
+
+
+def test_diff_flags_vat_and_ignores_how_a_clause_is_spelled():
+    from contract_analyst.eval.golden import GoldenOp
+
+    def gs(vat, target):
+        rates = [GoldenRate(label="Ставка", amount=Decimal(500), vat=vat, page=1, quote="Ставка 500 рублей")]
+        return _gs(documents=[_gdoc(rates=rates, ops=[GoldenOp(op="replace_clause", target=target)])])
+
+    assert [d.path for d in diff_golden(gs("excluded", "п. 3.1"), gs("included", "пункт 3.1"))] == ["documents[d1].rates"]
+
+
+def test_fold_check_reads_clauses_from_the_documents():
+    from contract_analyst.eval.golden import GoldenOp
+
+    main_page = ("Договор № D990000001-01\nг. Тверь 19.08.2020 г.\n12.1. Уведомления направляются по факсу в течение 3 дней.\n"
+                 "12.2. Копии по электронной почте имеют силу оригинала.")
+    sup_page = ("Дополнительное соглашение № D990000002-01 к Договору № D990000001-01 от 19.08.2020\n"
+                "1. Изложить пункт 12.2 Договора в редакции: копии через ЭДО в течение 1 дня имеют силу оригинала.")
+    main = _gdoc(terms={"notification_channel": GoldenValue(value="по факсу в течение 3 дней", page=1,
+                                                            quote="Уведомления направляются по факсу в течение 3 дней.")})
+    sup = _gdoc(file="s.pdf", doc_id="d2", kind="supplement",
+                number=GoldenValue(value="D990000002-01", page=1, quote="Дополнительное соглашение № D990000002-01"),
+                doc_date=GoldenValue(status="absent"),
+                parent_number=GoldenValue(value="D990000001-01", page=1, quote="к Договору № D990000001-01"),
+                effective_from=GoldenValue(value="2024-01-01", page=1, quote="Дополнительное соглашение"),
+                terms={"notification_channel": GoldenValue(value="копии через ЭДО в течение 1 дня", page=1,
+                                                           quote="копии через ЭДО в течение 1 дня")},
+                ops=[GoldenOp(op="replace_clause", target="12.2")])
+    chain = GoldenChain(contract_number="D990000001-01", main_doc_id="d1", order=["d1", "d2"],
+                        status_at={date(2026, 10, 30): "active"},
+                        terms_at={date(2026, 10, 30): {"notification_channel": "по факсу в течение 3 дней; копии через ЭДО в течение 1 дня"}})
+    gs = _gs(documents=[main, sup], chains=[chain])
+    docs = {"d1": text_doc([main_page], doc_id="d1"), "d2": text_doc([sup_page], doc_id="d2")}
+    assert fold_mismatches(gs, docs) == []
+    assert fold_mismatches(gs) != []  # without the texts no clause is known and the supplement replaces

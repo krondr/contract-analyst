@@ -1,4 +1,7 @@
-"""E3 alternative: the LLM folds the chain itself. Code builds the timeline; the LLM decides current values."""
+"""E3 alternative: the LLM folds the chain itself. Code builds the timeline; the LLM decides current values.
+
+The LLM only chooses: a value is accepted as one of the chain's extracted values, with that value's own source.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +11,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from contract_analyst.assemble.consolidate import consolidate
+from contract_analyst.ingest.normalize import normalize_text
 from contract_analyst.llm.client import LLMClient
 from contract_analyst.llm.prompts import load_prompt
 from contract_analyst.llm.structured import StructuredFailure, call_structured
@@ -18,7 +22,6 @@ from contract_analyst.models import (
     Extracted,
     Issue,
     RateRow,
-    Source,
     TermState,
     ValueStatus,
 )
@@ -71,13 +74,35 @@ def _iso(value: str | None) -> date | None:
         return None
 
 
-def _rate(m: MergedRate, known: set[str]) -> RateRow:
+_NOT_A_CANDIDATE = "not_a_candidate: значение модели не совпадает ни с одним значением документов цепочки"
+
+
+def _norm(text: object) -> str:
+    return " ".join(normalize_text(str(text or "")).casefold().replace("ё", "е").split()).strip(" .,;:«»\"'")
+
+
+def _candidates(chain: ContractChain, records: dict[str, DocumentRecord], doc_id: str) -> list[DocumentRecord]:
+    """The document the LLM named first, then the rest of the chain from the latest one."""
+    ids = [d.doc_id for d in reversed(chain.docs)]
+    return [records[i] for i in sorted(ids, key=lambda i: i != doc_id) if i in records]
+
+
+def _term(t: MergedTerm, chain: ContractChain, records: dict[str, DocumentRecord]) -> Extracted[str]:
+    for rec in _candidates(chain, records, t.doc_id):
+        ext = rec.terms.get(t.name)
+        if ext is not None and ext.status == ValueStatus.ACCEPTED and _norm(ext.value) == _norm(t.value):
+            return ext
+    return Extracted[str](value=t.value, status=ValueStatus.CONFLICT, reason=_NOT_A_CANDIDATE)
+
+
+def _rate(m: MergedRate, chain: ContractChain, records: dict[str, DocumentRecord]) -> RateRow:
     amount = parse_money(m.amount)
-    ok = amount is not None and m.doc_id in known
+    for rec in _candidates(chain, records, m.doc_id):
+        for row in rec.rates:
+            if row.status == ValueStatus.ACCEPTED and row.amount == amount and _norm(row.label) == _norm(m.label):
+                return row
     return RateRow(label=m.label, amount=amount or 0, valid_from=_iso(m.valid_from), valid_to=_iso(m.valid_to),
-                   status=ValueStatus.ACCEPTED if ok else ValueStatus.REJECTED,
-                   source=Source(doc_id=m.doc_id, page=1, quote=m.amount) if ok else None,
-                   reason=None if ok else "no_source: модель не указала документ-источник")
+                   status=ValueStatus.CONFLICT, reason=_NOT_A_CANDIDATE)
 
 
 def consolidate_llm(chain: ContractChain, records: dict[str, DocumentRecord], as_of: date,
@@ -89,14 +114,7 @@ def consolidate_llm(chain: ContractChain, records: dict[str, DocumentRecord], as
     if isinstance(out, StructuredFailure):
         return base.model_copy(update={"issues": [*base.issues, Issue(code="llm_merge_failed",
                                                                        message="модель не свела условия, использована свёртка кодом")]})
-    known = {d.doc_id for d in chain.docs}
-    terms = {}
-    for t in out.terms:
-        ok = t.doc_id in known
-        current = Extracted[str](value=t.value, status=ValueStatus.ACCEPTED if ok else ValueStatus.REJECTED,
-                                 source=Source(doc_id=t.doc_id, page=1, quote=t.value) if ok else None,
-                                 reason=None if ok else "no_source: модель не указала документ-источник")
-        terms[t.name] = TermState(name=t.name, current=current)
+    terms = {t.name: TermState(name=t.name, current=_term(t, chain, records)) for t in out.terms}
     return base.model_copy(update={"status": out.status, "status_since": _iso(out.status_since), "terms": terms,
-                                   "rates": [_rate(r, known) for r in out.rates],
-                                   "planned_rates": [_rate(r, known) for r in out.planned_rates]})
+                                   "rates": [_rate(r, chain, records) for r in out.rates],
+                                   "planned_rates": [_rate(r, chain, records) for r in out.planned_rates]})
