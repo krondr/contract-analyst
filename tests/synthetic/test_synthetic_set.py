@@ -8,7 +8,7 @@ import yaml
 
 from contract_analyst.config import load_settings
 from contract_analyst.eval.golden import load_golden
-from contract_analyst.eval.golden_tools import check_golden
+from contract_analyst.eval.golden_tools import check_golden, fold_mismatches
 from contract_analyst.ingest.inventory import list_inputs
 from contract_analyst.ingest.reader import read_document
 from contract_analyst.ocr.tesseract import TesseractEngine
@@ -26,6 +26,10 @@ def test_synthetic_golden_consistent_and_files_readable():
                                   for f in list_inputs(ROOT / "synthetic/build"))}
     assert check_golden(gs, docs) == []
     assert all(d.status in ("ok", "low_quality") for d in docs.values())
+
+
+def test_code_fold_agrees_with_golden():
+    assert fold_mismatches(load_golden(ROOT / "synthetic/golden.yaml")) == []
 
 
 def test_golden_covers_every_built_file_on_both_dates():

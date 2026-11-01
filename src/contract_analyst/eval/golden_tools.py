@@ -227,8 +227,7 @@ def _check_value(doc: GoldenDocument, field: str, v: GoldenValue, text_doc: Docu
 
 
 def check_golden(gs: GoldenSet, docs: dict[str, DocumentText], required_traps: set[str] | None = None) -> list[str]:
-    from contract_analyst.assemble.chains import build_chains
-    from contract_analyst.assemble.consolidate import consolidate
+    """Errors in the golden set itself: quotes, formats, references, traps. Fold disagreements: fold_mismatches."""
     from contract_analyst.gate.checks import check_quote_present
 
     errors: list[str] = []
@@ -249,34 +248,15 @@ def check_golden(gs: GoldenSet, docs: dict[str, DocumentText], required_traps: s
             else:
                 errors.append(f"{where}: rate needs page and quote")
 
-    known = {d.doc_id for d in gs.documents}
+    by_id = {d.doc_id: d for d in gs.documents}
     for chain in gs.chains:
-        if set(chain.order) - known or set(chain.invalidated) - set(chain.order):
+        if set(chain.order) - set(by_id) or set(chain.invalidated) - set(chain.order):
             errors.append(f"chains[{chain.contract_number}]: order/invalidated reference unknown documents")
         if chain.main_doc_id and chain.main_doc_id not in chain.order:
             errors.append(f"chains[{chain.contract_number}]: main_doc_id not in order")
-
-    records = [_to_record(d) for d in gs.documents]
-    by_id = {r.doc_id: r for r in records}
-    built = {c.contract_number: c for c in build_chains(records)}
-    for chain in gs.chains:
-        assembled = built.get(chain.contract_number)
-        if assembled is None:
-            errors.append(f"chains[{chain.contract_number}]: documents do not assemble into this chain")
-            continue
-        for when in gs.as_of_dates:
-            result = consolidate(assembled, by_id, when)
-            if when in chain.status_at and chain.status_at[when] != result.status:
-                errors.append(f"chains[{chain.contract_number}].status_at[{when}]: golden {chain.status_at[when]}, "
-                              f"recomputed {result.status}")
-            if when in chain.rates_at:
-                recomputed = {(r.amount.normalize(), r.valid_from, r.valid_to) for r in result.rates}
-                if _rate_key(chain.rates_at[when]) != recomputed:
-                    errors.append(f"chains[{chain.contract_number}].rates_at[{when}]: golden differs from recomputed")
-            for key, value in chain.terms_at.get(when, {}).items():
-                state = result.terms.get(key)
-                if state is None or not _similar(value, state.current.value):
-                    errors.append(f"chains[{chain.contract_number}].terms_at[{when}].{key}: golden differs from recomputed")
+        numbers = {v.value for d in chain.order if d in by_id for v in (by_id[d].number, by_id[d].parent_number)}
+        if chain.contract_number not in numbers:
+            errors.append(f"chains[{chain.contract_number}]: no document in order has this number or refers to it")
 
     if required_traps:
         present = {t.trap_id for t in gs.traps}
@@ -286,6 +266,45 @@ def check_golden(gs: GoldenSet, docs: dict[str, DocumentText], required_traps: s
         if set(cluster.members) - chain_numbers:
             errors.append(f"clusters[{cluster.category}]: members without chains")
     return errors
+
+
+def _rates_text(rates) -> str:
+    return "[" + "; ".join(sorted(f"{r.amount.normalize():f} {r.valid_from or '…'}–{r.valid_to or '…'}"
+                                  for r in rates)) + "]"
+
+
+def fold_mismatches(gs: GoldenSet) -> list[str]:
+    """Golden consolidation values that the code fold, run on the golden documents, computes differently.
+
+    They need adjudication, not a fix to match the code: the golden set is what the code fold is measured against
+    (E3), so forcing agreement would make that measurement circular.
+    """
+    from contract_analyst.assemble.chains import build_chains
+    from contract_analyst.assemble.consolidate import consolidate
+
+    records = [_to_record(d) for d in gs.documents]
+    by_id = {r.doc_id: r for r in records}
+    built = {c.contract_number: c for c in build_chains(records)}
+    items: list[str] = []
+    for chain in gs.chains:
+        where = f"chains[{chain.contract_number}]"
+        assembled = built.get(chain.contract_number)
+        if assembled is None:
+            items.append(f"{where}: the code builds no such chain from the golden documents")
+            continue
+        for when in gs.as_of_dates:
+            result = consolidate(assembled, by_id, when)
+            if when in chain.status_at and chain.status_at[when] != result.status:
+                items.append(f"{where}.status_at[{when}]: golden {chain.status_at[when]}, code fold {result.status}")
+            if when in chain.rates_at and _rate_key(chain.rates_at[when]) != _rate_key(result.rates):
+                items.append(f"{where}.rates_at[{when}]: golden {_rates_text(chain.rates_at[when])}, "
+                             f"code fold {_rates_text(result.rates)}")
+            for key, value in chain.terms_at.get(when, {}).items():
+                state = result.terms.get(key)
+                got = state.current.value if state else None
+                if not _similar(value, got):
+                    items.append(f"{where}.terms_at[{when}].{key}: golden «{value}», code fold «{got}»")
+    return items
 
 
 _PAGE_STYLE = """
@@ -338,4 +357,5 @@ def diffs_to_json(diffs: list[GoldenDiff]) -> str:
     return _json.dumps([d.model_dump() for d in diffs], ensure_ascii=False, indent=1)
 
 
-__all__ = ["GoldenDiff", "build_review_page", "check_golden", "diff_golden", "diffs_to_json", "dump_texts", "prefill"]
+__all__ = ["GoldenDiff", "build_review_page", "check_golden", "diff_golden", "diffs_to_json", "dump_texts", "fold_mismatches",
+           "prefill"]

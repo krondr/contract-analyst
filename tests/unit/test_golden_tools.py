@@ -30,7 +30,7 @@ def test_yaml_roundtrip_keeps_dates_and_decimals(tmp_path):
 
 
 from contract_analyst.eval.golden import GoldenDocument, GoldenTrap, GoldenValue
-from contract_analyst.eval.golden_tools import build_review_page, check_golden, diff_golden
+from contract_analyst.eval.golden_tools import build_review_page, check_golden, diff_golden, fold_mismatches
 
 PAGE = "Договор № D990000001-01\nг. Тверь 19.08.2020 г.\nСтавка составляет 500 рублей без НДС."
 
@@ -74,10 +74,38 @@ def test_check_catches_missing_quote():
     assert any("quote" in e and "city" in e for e in errors)
 
 
-def test_check_catches_consolidation_mismatch():
+def test_fold_mismatch_needs_adjudication_and_is_not_an_error():
     wrong = _gs()
     wrong.chains[0].rates_at[date(2026, 10, 30)] = [GoldenRate(label="Ставка", amount=Decimal(900))]
-    assert any("rates_at" in e for e in check_golden(wrong, {"d1": text_doc([PAGE], doc_id="d1")}))
+    assert check_golden(wrong, {"d1": text_doc([PAGE], doc_id="d1")}) == []
+    (item,) = fold_mismatches(wrong)
+    assert item.startswith("chains[D990000001-01].rates_at[2026-10-30]") and "900" in item and "500" in item
+    assert fold_mismatches(_gs()) == []
+
+
+def test_check_catches_chain_number_no_document_has():
+    typo = _gs(chains=[_gs().chains[0].model_copy(update={"contract_number": "D990000777-01"})])
+    errors = check_golden(typo, {"d1": text_doc([PAGE], doc_id="d1")})
+    assert errors == ["chains[D990000777-01]: no document in order has this number or refers to it"]
+
+
+def _cli_check(tmp_path, monkeypatch, gs):
+    from typer.testing import CliRunner
+
+    from contract_analyst import cli
+
+    monkeypatch.setattr(cli, "_read_all", lambda data: [text_doc([PAGE], doc_id="d1")])
+    dump_golden(gs, tmp_path / "g.yaml")
+    return CliRunner().invoke(cli.app, ["golden", "check", str(tmp_path / "g.yaml"), "--data", str(tmp_path)])
+
+
+def test_cli_golden_check_fails_only_on_errors(tmp_path, monkeypatch):
+    wrong = _gs()
+    wrong.chains[0].rates_at[date(2026, 10, 30)] = [GoldenRate(label="Ставка", amount=Decimal(900))]
+    res = _cli_check(tmp_path, monkeypatch, wrong)
+    assert res.exit_code == 0 and "needs adjudication: chains[D990000001-01].rates_at[2026-10-30]" in res.output
+    bad = _gs(documents=[_gdoc(city=GoldenValue(value="Псков", page=1, quote="г. Псков"))])
+    assert _cli_check(tmp_path, monkeypatch, bad).exit_code == 1
 
 
 def test_check_requires_traps():

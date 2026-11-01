@@ -92,16 +92,19 @@ def golden_diff(a: Path, b: Path, out: Path = Path("data/golden/disputed.json"))
 
 @golden_app.command("check")
 def golden_check(golden: Path, data: Path = Path("data/raw"), required_traps: str = "") -> None:
-    """Автопроверка эталона: цитаты, форматы, пересчёт свёртки, ловушки."""
+    """Автопроверка эталона: цитаты, форматы, ссылки, ловушки; расхождения со свёрткой кодом — на разбор."""
     from contract_analyst.eval.golden import load_golden
-    from contract_analyst.eval.golden_tools import check_golden
+    from contract_analyst.eval.golden_tools import check_golden, fold_mismatches
 
     docs = {d.doc_id: d for d in _read_all(data)}
     traps = {t.strip() for t in required_traps.split(",") if t.strip()} or None
-    errors = check_golden(load_golden(golden), docs, traps)
+    gs = load_golden(golden)
+    errors, disputed = check_golden(gs, docs, traps), fold_mismatches(gs)
     for error in errors:
         typer.echo(error)
-    typer.echo(f"{len(errors)} errors")
+    for item in disputed:
+        typer.echo(f"needs adjudication: {item}")
+    typer.echo(f"{len(errors)} errors, {len(disputed)} differences from the code fold need adjudication")
     raise typer.Exit(1 if errors else 0)
 
 
