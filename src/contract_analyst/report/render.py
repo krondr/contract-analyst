@@ -21,6 +21,7 @@ from contract_analyst.models import (
     Source,
     ValueStatus,
 )
+from contract_analyst.report.verify import grounding
 
 _ENV = jinja2.Environment(loader=jinja2.FileSystemLoader(Path(__file__).parent / "templates"),
                           undefined=jinja2.StrictUndefined, trim_blocks=True, lstrip_blocks=True, autoescape=False)
@@ -105,6 +106,12 @@ def _rate_history(chain: ContractChain, records: dict[str, DocumentRecord]) -> d
                 since = f" с {rate.valid_from}" if rate.valid_from else ""
                 history.setdefault(rate.label, []).append(f"{money(rate.amount)}{since} {ref(rate.source)}")
     return {label: steps for label, steps in history.items() if len(steps) > 1}
+
+
+def report_sources(ctx: ReportContext) -> dict[str, str]:
+    """What backs the LLM-written sentences of this report: see verify.grounding."""
+    return grounding(((d.doc_id, p.number, p.text) for d in ctx.documents for p in d.pages), ctx.records, ctx.chains,
+                     ctx.consolidated)
 
 
 def render_report(ctx: ReportContext) -> str:

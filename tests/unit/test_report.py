@@ -6,7 +6,7 @@ from contract_analyst.assemble.chains import build_chains
 from contract_analyst.assemble.consolidate import consolidate
 from contract_analyst.config import load_settings
 from contract_analyst.models import Decision, Extracted, OpType, Source, ValueStatus
-from contract_analyst.report.render import ReflectionItem, ReportContext, render_report
+from contract_analyst.report.render import ReflectionItem, ReportContext, render_report, report_sources
 from contract_analyst.report.verify import verify_claims
 from tests.fixtures.builders import make_record as rec
 from tests.fixtures.builders import text_doc
@@ -57,35 +57,65 @@ def test_refusals_decisions_and_unprocessed_listed():
     assert "t.xlsx" in md.split("## 6. Не обработано")[1] and "❌" in md.split("## 7. Reflection")[1]
 
 
+def llm(text: str) -> str:
+    return f"<!-- llm -->{text}<!-- /llm -->"
+
+
 def test_unreferenced_numeric_sentence_removed():
-    md = "<!-- llm -->Ставка выросла до 900 рублей. Условия совпадают [doc:abc:p1].<!-- /llm -->"
-    out, removed = verify_claims(md, {"doc:abc:p1"})
+    md = llm("Ставка выросла до 900 рублей. Условия совпадают [doc:abc:p1].")
+    out, removed = verify_claims(md, {"doc:abc:p1": "Ставка 900 рублей."})
     assert "900" not in out and removed == 1 and "Условия совпадают [doc:abc:p1]." in out
 
 
 def test_invalid_ref_removed():
-    out, removed = verify_claims("<!-- llm -->Срок до 2026 года [doc:zzz:p9].<!-- /llm -->", {"doc:abc:p1"})
+    out, removed = verify_claims(llm("Срок до 2026 года [doc:zzz:p9]."), {"doc:abc:p1": "Срок до 2026 года."})
     assert removed == 1 and "2026" not in out
 
 
 def test_abbreviations_decimals_and_dates_do_not_split_a_sentence():
-    for text in [("120 000 руб. в месяц без НДС, действует с 01.04.2025 по дополнительному соглашению "
-                  "D990100002-01 [doc:abc:p1]."),
-                 "Ставка по п. 3.1 составляет 700 руб. без НДС [doc:abc:p1].",
-                 "Сумма 1 500,50 руб., т.е. 1 тыс. 500 руб. 50 коп., см. пп. 2.1.1 и ст. 450 ГК РФ [doc:abc:p1].",
-                 "Договор подписали Иванов И. И. и Петров П. П. в г. Тверь 01.03.2025 г. [doc:abc:p1].",
-                 "1. Ставка 700 руб. [doc:abc:p1]\n2. Срок до 31.12.2026 [doc:abc:p1]"]:
-        block = f"<!-- llm -->{text}<!-- /llm -->"
-        assert verify_claims(block, {"doc:abc:p1"}) == (block, 0), text
+    texts = [("120 000 руб. в месяц без НДС, действует с 01.04.2025 по дополнительному соглашению "
+              "D990100002-01 [doc:abc:p1]."),
+             "Ставка по п. 3.1 составляет 700 руб. без НДС [doc:abc:p1].",
+             "Сумма 1 500,50 руб., т.е. 1 тыс. 500 руб. 50 коп., см. пп. 2.1.1 и ст. 450 ГК РФ [doc:abc:p1].",
+             "Договор подписали Иванов И. И. и Петров П. П. в г. Тверь 01.03.2025 г. [doc:abc:p1].",
+             "1. Ставка 700 руб. [doc:abc:p1]\n2. Срок до 31.12.2026 [doc:abc:p1]"]
+    page = {"doc:abc:p1": " ".join(texts)}
+    for text in texts:
+        assert verify_claims(llm(text), page) == (llm(text), 0), text
 
 
 def test_sentence_ends_after_an_abbreviation_before_a_capital():
-    md = "<!-- llm -->Ставка 900 руб. Срок до 2027 г. Договор действует [doc:abc:p1].<!-- /llm -->"
-    assert verify_claims(md, {"doc:abc:p1"}) == ("<!-- llm -->Договор действует [doc:abc:p1].<!-- /llm -->", 2)
+    md = llm("Ставка 900 руб. Срок до 2027 г. Договор действует [doc:abc:p1].")
+    assert verify_claims(md, {"doc:abc:p1": ""}) == (llm("Договор действует [doc:abc:p1]."), 2)
+
+
+def test_numbers_and_dates_must_be_on_the_cited_page():
+    sources = {"doc:abc:p1": "3.1. С «01» апреля 2025 г. арендная плата составляет 120 000 (сто двадцать тысяч) "
+                             "рублей в месяц без НДС.", "doc:abc:p2": "7.1. Договор действует до 31.12.2026."}
+    for text in ["Арендная плата 120000 руб. с 01.04.2025 [doc:abc:p1].",
+                 "С 2025-04-01 по п. 3.1 платят 120 тыс. руб. [doc:abc:p1].",
+                 "Плата 120 000 руб. [doc:abc:p1], договор действует до 31 декабря 2026 г. [doc:abc:p2]."]:
+        assert verify_claims(llm(text), sources) == (llm(text), 0), text
+    for text in ["Арендная плата 900 руб. [doc:abc:p1].", "Плата 120 000 руб. с 02.04.2025 [doc:abc:p1].",
+                 "Договор действует до 31.12.2026 [doc:abc:p1]."]:
+        assert verify_claims(llm(text), sources) == (llm(""), 1), text
+
+
+def test_report_claims_backed_by_page_text_or_an_accepted_value_cited_with_it():
+    sources = report_sources(small_context())
+    md = llm("Ставка 120000 рублей [doc:s:p1]. Штраф 5000 рублей [doc:m:p1].")  # the penalty was rejected
+    assert verify_claims(md, sources) == (llm("Ставка 120000 рублей [doc:s:p1]."), 1)
+
+
+def test_document_numbers_of_the_cited_chain_are_backed():
+    sources = report_sources(small_context())
+    same_chain = llm("По договору D990000001-01 соглашение D990000002-01 изменило ставку [doc:s:p1].")
+    assert verify_claims(same_chain, sources) == (same_chain, 0)
+    assert verify_claims(llm("Договор D990000009-01 изменён [doc:s:p1]."), sources)[1] == 1
 
 
 def test_text_outside_llm_blocks_untouched():
-    out, removed = verify_claims("| Ставка | 900 |\n<!-- llm -->Без чисел.<!-- /llm -->", set())
+    out, removed = verify_claims("| Ставка | 900 |\n" + llm("Без чисел."), {})
     assert removed == 0 and "| Ставка | 900 |" in out
 
 

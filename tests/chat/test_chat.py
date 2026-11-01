@@ -53,6 +53,12 @@ def test_unsupported_number_removed_and_empty_answer_becomes_refusal(tmp_path):
     assert session.ask("Когда истекает срок?", thread="t4") == "Нет данных в базе знаний."
 
 
+def test_number_absent_from_the_cited_page_removed(tmp_path):
+    session = ChatSession(kb(tmp_path), ScriptedClient([AssistantTurn(content="Действует ставка 900 рублей [doc:m:p1].")]),
+                          load_settings(), tmp_path / "chat.sqlite")
+    assert session.ask("Какая ставка действует?", thread="t5") == "Нет данных в базе знаний."
+
+
 def test_chat_eval_scores_facts_refusals_and_refs(tmp_path):
     questions = tmp_path / "q.yaml"
     questions.write_text("""

@@ -26,7 +26,7 @@ from contract_analyst.models import (
 )
 from contract_analyst.ocr import get_ocr_engine
 from contract_analyst.parsing.header import parse_header
-from contract_analyst.report.render import ReportContext, render_report
+from contract_analyst.report.render import ReportContext, render_report, report_sources
 from contract_analyst.report.verify import verify_claims
 from contract_analyst.understand.understand import prompt_versions, understand_document
 
@@ -258,14 +258,13 @@ def record_decision(ctx: RunContext, decision: Decision) -> ToolResult:
 
 
 def write_report(ctx: RunContext) -> ToolResult:
-    valid = {f"doc:{d.doc_id}:p{p.number}" for d in ctx.documents.values() for p in d.pages}
     report_ctx = ReportContext(
         run_id=ctx.run_dir.name, as_of=ctx.as_of, model=ctx.client.model_name, prompt_versions=prompt_versions(),
         ocr=f"{ctx.ocr_engine.name}/{ctx.settings.ocr_preprocess}", documents=list(ctx.documents.values()),
         records=ctx.records, chains=ctx.chains, consolidated=ctx.consolidated, clusters=ctx.clusters,
         decisions=ctx.decisions, reflection=ctx.reflection, unprocessed=ctx.unprocessed,
         trace_path=str(ctx.trace.path), metrics_path=str(ctx.run_dir / "metrics.json"))
-    markdown, removed = verify_claims(render_report(report_ctx), valid)
+    markdown, removed = verify_claims(render_report(report_ctx), report_sources(report_ctx))
     ctx.report_path = ctx.run_dir / "report.md"
     ctx.report_path.write_text(markdown, encoding="utf-8")
     ctx.removed_claims = removed

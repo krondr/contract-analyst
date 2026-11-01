@@ -23,6 +23,7 @@ from contract_analyst.models import (
     TermChange,
     ValueStatus,
 )
+from contract_analyst.report.verify import grounding
 
 _KEEP = (ValueStatus.ACCEPTED, ValueStatus.CONFLICT)
 
@@ -82,6 +83,10 @@ class KnowledgeBase:
             db.executemany("INSERT INTO clauses VALUES (?, ?, ?, ?, ?, ?)", [
                 (doc_id, contract_of.get(doc_id), c.clause_id, c.page, c.text, lemmatize(c.text))
                 for doc_id, d in documents.items() for c in d.clauses])
+            # Whole pages, not clauses: a clause can run onto the next page, and the claim check needs page text.
+            db.execute("CREATE TABLE pages (doc_id TEXT, page INTEGER, text TEXT, PRIMARY KEY (doc_id, page))")
+            db.executemany("INSERT INTO pages VALUES (?, ?, ?)",
+                           [(doc_id, p.number, p.text) for doc_id, d in documents.items() for p in d.pages])
 
     # --- read --------------------------------------------------------------------------------------------
     def _load(self, name: str, adapter: TypeAdapter, default):
@@ -142,7 +147,22 @@ class KnowledgeBase:
         return [ClauseHit(doc_id=r[0], contract_number=r[1], clause_id=r[2], page=int(r[3]), snippet=r[4], score=-r[5])
                 for r in rows]
 
-    def valid_refs(self) -> set[str]:
+    def sources(self) -> dict[str, str]:
+        """Every valid reference with what can back a claim citing it: page text and the values from that page."""
+        texts = {}
+        path = self.root / "kb.sqlite"
+        if path.exists():
+            with sqlite3.connect(path) as db:
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'pages'").fetchone():
+                    texts = {(d, p): t for d, p, t in db.execute("SELECT doc_id, page, text FROM pages")}
+        # A base saved before page texts were stored still has its references; only its values can back claims.
+        pages = [(doc_id, page, texts.get((doc_id, page), "")) for doc_id, page in self._pages()]
+        return grounding(pages, self.records(), self.chains(), self.consolidated())
+
+    def _pages(self) -> list[tuple[str, int]]:
         path = self.root / "documents.json"
-        pages = json.loads(path.read_text(encoding="utf-8"))["pages"] if path.exists() else {}
-        return {f"doc:{doc_id}:p{p}" for doc_id, n in pages.items() for p in range(1, n + 1)}
+        counts = json.loads(path.read_text(encoding="utf-8"))["pages"] if path.exists() else {}
+        return [(doc_id, p) for doc_id, n in counts.items() for p in range(1, n + 1)]
+
+    def valid_refs(self) -> set[str]:
+        return {f"doc:{doc_id}:p{page}" for doc_id, page in self._pages()}
