@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 import httpx
@@ -27,8 +28,8 @@ from contract_analyst.models import (
     ValueStatus,
 )
 from contract_analyst.parsing.header import HeaderGuess, detect_draft
-from contract_analyst.understand.routing import select_clauses
-from contract_analyst.understand.schemas import HeaderOut, OpsOut, RatesOut, TermsOut, ValueOut
+from contract_analyst.understand.routing import select_clauses, select_term_clauses
+from contract_analyst.understand.schemas import DatesOut, HeaderOut, OpsOut, RatesOut, TermsOut, ValueOut
 
 GROUP_PROMPTS = {"header": "header", "core_terms": "terms", "dealer": "terms", "money": "rates", "ops": "ops"}
 GROUP_SCHEMAS = {"header": HeaderOut, "core_terms": TermsOut, "dealer": TermsOut, "money": RatesOut, "ops": OpsOut}
@@ -40,7 +41,12 @@ _TIMEOUTS = (TimeoutError, httpx.TimeoutException)
 
 
 def prompt_versions() -> dict[str, int]:
-    return {name: load_prompt(name).version for name in sorted(set(GROUP_PROMPTS.values()))}
+    return {name: load_prompt(name).version for name in sorted({*GROUP_PROMPTS.values(), "dates"})}
+
+
+# «Вступает в силу с даты (момента) его подписания»: the start is the signing date, and the text names no date.
+_FROM_SIGNING = re.compile(r"\b(?:с|со)\s+(?:даты|дня|момента)\s+(?:его\s+|её\s+|ее\s+|их\s+)?подписани", re.IGNORECASE)
+_DOCUMENT_TERM = ("effective_from", "effective_to")
 
 
 def _absent(reason: str = "absent") -> Extracted[str]:
@@ -59,8 +65,13 @@ def _resolve_page(doc: DocumentText, quote: str | None, hint: int | None, settin
 
 def _gate_value(field: str, out: ValueOut, kind: str, doc: DocumentText, settings: Settings) -> Extracted[str]:
     page = _resolve_page(doc, out.quote, out.page, settings)
-    return apply_gate(Candidate(field=field, value=out.value, kind=kind, page=page, quote=out.quote,
-                                redacted=out.redacted), doc, settings)
+    gated = apply_gate(Candidate(field=field, value=out.value, kind=kind, page=page, quote=out.quote,
+                                 redacted=out.redacted), doc, settings)
+    if field == "effective_from" and gated.status == ValueStatus.REJECTED and _FROM_SIGNING.search(out.quote or ""):
+        # The date the model filled in is not in the text; the start is the signing date, which the fold takes from
+        # an absent start. A refused start would turn the document's changes into conflicts instead.
+        return _absent("from_signing")
+    return gated
 
 
 def _merge(regex: Extracted[str] | None, llm: Extracted[str] | None) -> Extracted[str]:
@@ -181,6 +192,24 @@ def _run_group(acc: _Acc, doc: DocumentText, group: str, client: LLMClient, sett
                     acc.ops.append(gated)
             if out.effective_from.value and acc.ops_effective is None:
                 acc.ops_effective = _gate_value("effective_from", out.effective_from, "date", doc, settings)
+    if group == "header":
+        _run_term(acc, doc, client, settings)
+
+
+def _run_term(acc: _Acc, doc: DocumentText, client: LLMClient, settings: Settings) -> None:
+    """When the document itself starts and ends, from the clauses that say so (usually near its end), in a call of
+    its own: the header batch, which also classifies the document, stays the same. Fills only what it did not find."""
+    missing = [f for f in _DOCUMENT_TERM if acc.header_values.get(f) is None
+               or acc.header_values[f].status == ValueStatus.ABSENT]
+    for batch in select_term_clauses(doc, settings) if missing else []:
+        kind = acc.header.kind.value if acc.header else "unknown"
+        body = "\n\n".join(f"[стр. {c.page}] {c.text}" for c in batch)
+        messages = [{"role": "system", "content": load_prompt("dates").render()},
+                    {"role": "user", "content": f"Документ: {doc.file.name} (вид: {kind})\n\n{body}"}]
+        out = _call(client, messages, DatesOut, acc.issues, doc, "dates")
+        for field in missing if out is not None else []:
+            if acc.header_values.get(field) is None or acc.header_values[field].status == ValueStatus.ABSENT:
+                acc.header_values[field] = _gate_value(field, getattr(out, field), "date", doc, settings)
 
 
 def _parent(number: Extracted[str], when: Extracted[str]) -> dict:

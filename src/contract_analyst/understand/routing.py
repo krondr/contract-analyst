@@ -79,10 +79,9 @@ def _supplement_ops(doc: DocumentText) -> list[Clause]:
 def _chosen(doc: DocumentText, group: str, supplement: bool) -> list[Clause]:
     if group == "ops" and supplement:
         return _supplement_ops(doc)
-    if group == "header":  # the preamble, the first clauses, and wherever the document states its own term
-        numbered = [c for c in doc.clauses if c.clause_id != "preamble"]
-        return ([c for c in doc.clauses if c.clause_id == "preamble"] + numbered[:2]
-                + [c for c in numbered[2:] if _states_own_term(c.text)])
+    if group == "header":
+        numbered = [c for c in doc.clauses if c.clause_id != "preamble"][:2]
+        return [c for c in doc.clauses if c.clause_id == "preamble"] + numbered
     pattern = re.compile(KEYWORDS[group], re.IGNORECASE)
     picked = [c for c in doc.clauses if pattern.search(c.text)]
     if group == "ops":
@@ -91,10 +90,20 @@ def _chosen(doc: DocumentText, group: str, supplement: bool) -> list[Clause]:
 
 
 def select_clauses(doc: DocumentText, group: str, settings: Settings, supplement: bool = False) -> list[list[Clause]]:
-    budget = settings.llm_batch_tokens
+    return _pack(_chosen(doc, group, supplement), settings.llm_batch_tokens)
+
+
+def select_term_clauses(doc: DocumentText, settings: Settings) -> list[list[Clause]]:
+    """Where the document states its own start or end, past the clauses the header batch already reads: a call of
+    its own, so the batch that classifies the document stays the same."""
+    numbered = [c for c in doc.clauses if c.clause_id != "preamble"]
+    return _pack([c for c in numbered[2:] if _states_own_term(c.text)], settings.llm_batch_tokens)
+
+
+def _pack(clauses: list[Clause], budget: int) -> list[list[Clause]]:
     batches: list[list[Clause]] = []
     current: list[Clause] = []
-    for clause in _chosen(doc, group, supplement):
+    for clause in clauses:
         for piece in _split(clause, budget * 3):
             if current and estimate_tokens([*current, piece]) > budget:
                 batches.append(current)

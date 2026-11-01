@@ -64,6 +64,12 @@ class OpOut(BaseModel):
     quote: str
 
 
+class DatesOut(BaseModel):
+    """When the document itself starts and ends."""
+    effective_from: ValueOut = ValueOut()
+    effective_to: ValueOut = ValueOut()
+
+
 class OpsOut(BaseModel):
     ops: list[OpOut] = []
     effective_from: ValueOut = ValueOut()  # when the document itself takes effect

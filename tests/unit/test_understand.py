@@ -8,7 +8,7 @@ from contract_analyst.ingest.inventory import list_inputs
 from contract_analyst.ingest.reader import read_document
 from contract_analyst.llm.scripted import ScriptedClient, load_script
 from contract_analyst.parsing.header import HeaderGuess, parse_header
-from contract_analyst.understand.routing import estimate_tokens, select_clauses
+from contract_analyst.understand.routing import estimate_tokens, select_clauses, select_term_clauses
 from contract_analyst.understand.understand import understand_document
 from tests.fixtures.builders import FakeOcrEngine, make_docx, text_doc
 
@@ -143,7 +143,7 @@ def test_auto_numbered_docx_supplement_reaches_ops(tmp_path):
 
 
 def test_supplement_ops_call_sees_every_operation():
-    client = ScriptedClient([_header_json(kind="supplement"), '{"ops": []}'])
+    client = ScriptedClient([_header_json(kind="supplement"), _dates_json(), '{"ops": []}'])
     understand_document(text_doc([CHANGE_LIST]), parse_header(CHANGE_LIST), client, load_settings(),
                         groups=["header", "ops"])
     body = client.calls[-1]["messages"][1]["content"]
@@ -154,10 +154,10 @@ def test_ops_skipped_only_when_title_and_model_both_say_main():
     supplement = text_doc([("Дополнительное соглашение № D990000005-01\nг. Тверь 01.06.2026 г.\n"
                             "1. Внести в Договор аренды следующие изменения:\n1.1. Пункт 3.1 изложить в новой редакции.\n"
                             "2. Соглашение вступает в силу с 01.07.2026.")])
-    client = ScriptedClient([_header_json(kind="main"), '{"ops": []}'])
+    client = ScriptedClient([_header_json(kind="main"), _dates_json(), '{"ops": []}'])
     understand_document(supplement, parse_header(supplement.pages[0].text), client, load_settings(),
                         groups=["header", "ops"])
-    assert [c["schema"] for c in client.calls] == ["HeaderOut", "OpsOut"]
+    assert [c["schema"] for c in client.calls] == ["HeaderOut", "DatesOut", "OpsOut"]  # clause 2 states the term
     contract = text_doc([("Договор аренды № D990000006-01\nг. Тверь 01.06.2026 г.\n1. Предмет договора: аренда.\n"
                           "2. Договор может быть расторгнут по соглашению Сторон.")])
     client = ScriptedClient([_header_json(kind="main")])
@@ -182,9 +182,13 @@ TERM_LATE = ("Договор № D990000001-01\nг. Тверь 21.01.2021\n"
              + "\n11. Настоящий Договор вступает в силу с 01.04.2021 и действует до 31.12.2026.\n12. Реквизиты сторон.")
 
 
-def test_header_reads_the_clause_where_the_document_states_its_own_term():
-    ids = _header_ids(text_doc([TERM_LATE]))
-    assert ids[:3] == ["preamble", "1", "2"] and "11" in ids and "12" not in ids
+def _term_ids(doc):
+    return [c.clause_id for b in select_term_clauses(doc, load_settings()) for c in b]
+
+
+def test_the_document_term_is_read_apart_from_the_header():
+    doc = text_doc([TERM_LATE])
+    assert _header_ids(doc) == ["preamble", "1", "2"] and _term_ids(doc) == ["11"]
 
 
 def test_header_skips_a_term_that_is_only_quoted_new_wording():
@@ -192,8 +196,7 @@ def test_header_skips_a_term_that_is_only_quoted_new_wording():
             "1. Стороны договорились о следующем.\n2. Обязательства сторон сохраняются.\n"
             "3. Пункт 7.1 Договора изложить в следующей редакции: «7.1. Договор действует до 31.12.2027».\n"
             "4. Настоящее Соглашение вступает в силу с 01.01.2027.")
-    ids = _header_ids(text_doc([text]))
-    assert "4" in ids and "3" not in ids
+    assert _term_ids(text_doc([text])) == ["4"]
 
 
 def test_a_later_header_batch_fills_a_field_the_first_did_not_find():
@@ -203,5 +206,28 @@ def test_a_later_header_batch_fills_a_field_the_first_did_not_find():
     batches = len(select_clauses(doc, "header", load_settings()))
     assert batches > 1
     start = {"value": "2021-04-01", "page": 1, "quote": "Настоящий Договор вступает в силу с 01.04.2021"}
-    rec = _understand(doc, [_header_json()] * (batches - 1) + [_header_json(effective_from=start)], groups=["header"])
+    script = [_header_json()] * (batches - 1) + [_header_json(effective_from=start), _dates_json()]
+    rec = _understand(doc, script, groups=["header"])
     assert (rec.effective_from.status, rec.effective_from.value) == ("accepted", date(2021, 4, 1))
+
+
+def _dates_json(**fields):
+    return json.dumps({"effective_from": {"value": None}, "effective_to": {"value": None}, **fields}, ensure_ascii=False)
+
+
+def test_dates_call_reads_a_late_term_clause_and_leaves_the_kind_to_the_header():
+    start = {"value": "2021-04-01", "page": 1, "quote": "Настоящий Договор вступает в силу с 01.04.2021"}
+    end = {"value": "2026-12-31", "page": 1, "quote": "и действует до 31.12.2026"}
+    rec = _understand(text_doc([TERM_LATE]), [_header_json(kind="main"), _dates_json(effective_from=start, effective_to=end)],
+                      groups=["header"])
+    assert (rec.kind.value, rec.effective_from.value, rec.effective_to.value) == ("main", date(2021, 4, 1),
+                                                                                  date(2026, 12, 31))
+
+
+def test_entry_into_force_from_signing_leaves_the_start_to_the_signing_date():
+    doc = text_doc([("Дополнительное соглашение № D990000002-01\nк Договору № D990000001-01 от 21.01.2021\n"
+                     "1. Стороны договорились о следующем.\n2. Настоящее Соглашение вступает в силу с даты его подписания.")])
+    filled_in = {"value": "2021-02-01", "page": 1, "quote": "Настоящее Соглашение вступает в силу с даты его подписания"}
+    rec = _understand(doc, [_header_json(kind="supplement", effective_from=filled_in)], groups=["header"])
+    assert (rec.effective_from.status, rec.effective_from.reason) == ("absent", "from_signing")
+
