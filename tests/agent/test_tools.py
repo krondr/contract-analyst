@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from contract_analyst.agent.guards import Guard
 from contract_analyst.agent.steps import ingest_all
 from contract_analyst.agent.tools import TOOLS, dispatch, tool_schemas
@@ -73,6 +75,58 @@ def test_consecutive_errors_stop_the_agent_and_a_success_resets_them(ctx):
     for _ in range(3):
         dispatch(ctx, ToolCall(id="x", name="analyze_document", args={}), guard)
     assert guard.stuck
+
+
+def _scanned(ctx, file_name, text, conf):
+    """Replace a document's page 1 with an OCR page of the given text and confidence."""
+    from contract_analyst.agent.steps import resolve_doc_id
+    from contract_analyst.models import PageMethod, PageQuality
+
+    doc_id = resolve_doc_id(ctx, file_name)
+    doc = ctx.documents[doc_id]
+    page = doc.pages[0].model_copy(update={"method": PageMethod.OCR, "text": text, "quality": PageQuality(
+        chars=len(text), ocr_mean_conf=conf, low_conf_ratio=0.0 if conf > 0.9 else 0.6)})
+    return doc_id, doc.model_copy(update={"pages": [page], "status": "ok" if conf > 0.9 else "low_quality"})
+
+
+def test_rerecognize_leaves_text_layer_pages_alone(ctx, monkeypatch):
+    from contract_analyst.agent import steps
+
+    ingest_all(ctx)
+    monkeypatch.setattr(steps, "rerecognize_pages", lambda *a, **k: pytest.fail("a text page was sent to OCR"))
+    result = dispatch(ctx, call("rerecognize", doc_id="Договор аренды.pdf", pages=[1], strategy="higher_dpi"),
+                      Guard(10, 60))
+    assert result.error_type == "not_ocr" and "текстового слоя" in result.hint
+
+
+def test_rerecognize_reparses_the_header_of_the_better_text(ctx, monkeypatch):
+    from contract_analyst.agent import steps
+
+    ingest_all(ctx)
+    doc_id, worse = _scanned(ctx, "ДС2 скан.pdf", "Доп0лн1тельн0е с0глашен1е", 0.4)
+    ctx.documents[doc_id] = worse
+    ctx.headers[doc_id] = steps.parse_header(worse.pages[0].text)
+    _, better = _scanned(ctx, "ДС2 скан.pdf", "Дополнительное соглашение № D990000003-01\nк Договору аренды "
+                                             "№ D990000001-01 от 10.01.2024 г.", 0.97)
+    monkeypatch.setattr(steps, "rerecognize_pages", lambda *a, **k: better)
+    result = dispatch(ctx, call("rerecognize", doc_id=doc_id, pages=[1], strategy="higher_dpi"), Guard(10, 60))
+    assert result.data["adopted"] and ctx.headers[doc_id].number == "D990000003-01"
+
+
+def test_header_reanalysis_updates_the_end_date(ctx, monkeypatch):
+    from datetime import date
+
+    import contract_analyst.agent.steps as steps_module
+    from tests.fixtures.builders import make_record
+
+    ends = iter([None, date(2026, 12, 31)])
+    monkeypatch.setattr(steps_module, "understand_document", lambda doc, header, client, settings, groups=None:
+                        make_record(doc.doc_id, "D990000002-01", effective_to=next(ends)))
+    ingest_all(ctx)
+    steps_module.analyze_docs(ctx, ["ДС1.pdf"])
+    steps_module.analyze_docs(ctx, ["ДС1.pdf"], ["header"])
+    (record,) = ctx.records.values()
+    assert record.effective_to.value == date(2026, 12, 31)
 
 
 def test_scan_read_returns_low_quality_with_hint(tmp_path, fixtures_package):

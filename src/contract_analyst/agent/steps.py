@@ -164,28 +164,39 @@ def rerecognize(ctx: RunContext, doc_id: str, pages: list[int], strategy: str) -
         mode = "deskew_sauvola"
     elif strategy == "alt_engine":
         engine = get_ocr_engine("rapidocr" if ctx.ocr_engine.name == "tesseract" else "tesseract")
-    pages = [p for p in pages if 1 <= p <= len(doc.pages)]
-    better = rerecognize_pages(doc, pages, engine, mode, dpi, ctx.settings)
+    # Only scanned pages: a text-layer page has no OCR confidence to beat, and OCR would replace exact text.
+    ocr = [p for p in pages if 1 <= p <= len(doc.pages) and doc.pages[p - 1].method == PageMethod.OCR]
+    other = [p for p in pages if p not in ocr]
+    skipped = f"Страницы {other} прочитаны из текстового слоя или пусты: распознавать нечего" if other else None
+    if not ocr:
+        return ToolResult(status="error", error_type="not_ocr", hint=skipped)
+    better = rerecognize_pages(doc, ocr, engine, mode, dpi, ctx.settings)
     report, improved = [], False
-    for p in pages:
+    for p in ocr:
         before = doc.pages[p - 1].quality.ocr_mean_conf or 0.0
         after = better.pages[p - 1].quality.ocr_mean_conf or 0.0
         report.append({"page": p, "before": round(before, 3), "after": round(after, 3)})
         improved = improved or after > before
     if improved:
         ctx.documents[doc_id] = better
+        ctx.headers[doc_id] = parse_header(better.pages[0].text if better.pages else "")
         ctx.changed("documents")
     status = "ok" if (better if improved else doc).status == "ok" else "low_quality"
+    hints = [skipped,
+             None if status == "ok" else "Качество всё ещё низкое: значения с этих страниц будут отклонены шлюзом",
+             "Текст изменился: разбери документ заново (analyze_document)" if improved and doc_id in ctx.records
+             else None]
     return ToolResult(status=status, data=fit({"doc_id": doc_id, "strategy": strategy, "pages": report,
                                                "adopted": improved}),
-                      hint=None if status == "ok" else "Качество всё ещё низкое: значения с этих страниц будут отклонены шлюзом")
+                      hint="; ".join(h for h in hints if h) or None)
 
 
 def _merge_records(old: DocumentRecord, new: DocumentRecord, groups: list[str]) -> DocumentRecord:
     update = {}
     if "header" in groups:
         update.update({f: getattr(new, f) for f in ("kind", "number", "doc_date", "city", "parent", "effective_from",
-                                                     "subject_category", "parties", "title", "is_draft")})
+                                                     "effective_to", "subject_category", "parties", "title",
+                                                     "is_draft")})
     if {"core_terms", "dealer"} & set(groups):
         update["terms"] = {**old.terms, **new.terms}
     if "money" in groups:
