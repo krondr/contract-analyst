@@ -29,7 +29,7 @@ def analyze(data: Path,
     """Разобрать пакет документов и собрать отчёт."""
     from datetime import date
 
-    from contract_analyst.agent.runner import run_analysis
+    from contract_analyst.agent.runner import InputError, run_analysis
     from contract_analyst.llm.client import LLMUnavailable, ReplayMiss
 
     overrides = {k: v for k, v in {"llm_model": model, "llm_cache_mode": llm_cache, "agent_variant": variant}.items() if v}
@@ -40,6 +40,9 @@ def analyze(data: Path,
                               llm_cache=cache_file)
     except LLMUnavailable as exc:
         typer.echo(exc.hint)
+        raise typer.Exit(2) from None
+    except InputError as exc:
+        typer.echo(str(exc))
         raise typer.Exit(2) from None
     except ReplayMiss as exc:
         typer.echo(f"Нет записанного ответа модели для этого запуска (режим replay): {exc}")

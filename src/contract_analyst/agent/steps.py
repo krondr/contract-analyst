@@ -11,7 +11,7 @@ from contract_analyst.agent.context import RunContext
 from contract_analyst.analyze.cluster import cluster_contracts, summarize_cluster
 from contract_analyst.assemble.chains import build_chains
 from contract_analyst.assemble.consolidate import consolidate
-from contract_analyst.ingest.inventory import list_inputs
+from contract_analyst.ingest.inventory import list_inputs, path_key
 from contract_analyst.ingest.reader import _error, read_document, rerecognize_pages
 from contract_analyst.kb.store import KnowledgeBase
 from contract_analyst.llm.ollama_client import TRANSPORT_ERRORS
@@ -102,14 +102,17 @@ def _llm_failure(exc: Exception) -> str:
     return f"{kind}: {type(exc).__name__}: {exc}"[:300]
 
 
+def _inventory(ctx: RunContext) -> list[InputFile]:
+    files = list_inputs(ctx.input_dir)
+    return files if ctx.only_paths is None else [f for f in files if path_key(f.path) in ctx.only_paths]
+
+
 def ingest_all(ctx: RunContext) -> ToolResult:
-    ctx.inventory = list_inputs(ctx.input_dir)
-    if ctx.only_paths is not None:
-        ctx.inventory = [f for f in ctx.inventory if f.path in ctx.only_paths]
+    ctx.inventory = _inventory(ctx)
     names = {f.path: f.name for f in ctx.inventory}
     todo = []
     for f in ctx.inventory:
-        if f.duplicate_of:
+        if f.duplicate_of in names:  # only copies within the selection: a file picked by --doc is always read
             _unprocessed(ctx, f.name, f"дубликат файла {names.get(f.duplicate_of, f.duplicate_of)}")
         else:
             todo.append(f)
@@ -124,14 +127,14 @@ def ingest_all(ctx: RunContext) -> ToolResult:
 
 def list_only(ctx: RunContext) -> ToolResult:
     """Variant C: the agent sees the file list and decides how to read each file."""
-    ctx.inventory = list_inputs(ctx.input_dir)
+    ctx.inventory = _inventory(ctx)
     return ToolResult(status="ok", data=fit({"files": [{"file": f.name, "format": f.format.value, "bytes": f.size_bytes,
                                                        "duplicate_of": f.duplicate_of} for f in ctx.inventory]}))
 
 
 def read_one(ctx: RunContext, file_name: str) -> ToolResult:
     if not ctx.inventory:
-        ctx.inventory = list_inputs(ctx.input_dir)
+        ctx.inventory = _inventory(ctx)
     match = next((f for f in ctx.inventory if f.name == file_name), None)
     if match is None:
         return ToolResult(status="error", error_type="not_found", hint="Нет такого файла: вызови list_inputs")
