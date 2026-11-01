@@ -18,20 +18,23 @@ ROOT = Path(__file__).resolve().parents[2]
 needs_tesseract = pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract binary missing")
 
 
+@pytest.fixture(scope="module")
+def synthetic_docs():
+    return {d.doc_id: d for d in (read_document(f, TesseractEngine(), load_settings())
+                                  for f in list_inputs(ROOT / "synthetic/build"))}
+
+
 @pytest.mark.ocr
 @needs_tesseract
-def test_synthetic_golden_consistent_and_files_readable():
-    gs = load_golden(ROOT / "synthetic/golden.yaml")
-    docs = {d.doc_id: d for d in (read_document(f, TesseractEngine(), load_settings())
-                                  for f in list_inputs(ROOT / "synthetic/build"))}
-    assert check_golden(gs, docs) == []
-    assert all(d.status in ("ok", "low_quality") for d in docs.values())
+def test_synthetic_golden_consistent_and_files_readable(synthetic_docs):
+    assert check_golden(load_golden(ROOT / "synthetic/golden.yaml"), synthetic_docs) == []
+    assert all(d.status in ("ok", "low_quality") for d in synthetic_docs.values())
 
 
-@pytest.mark.xfail(strict=True, reason="needs adjudication: ДС3 has no replacing op, so the code fold joins the old and "
-                                      "the new plan_indicators; the golden keeps only «не применяется с 01.03.2026»")
-def test_code_fold_agrees_with_golden():
-    assert fold_mismatches(load_golden(ROOT / "synthetic/golden.yaml")) == []
+@pytest.mark.ocr
+@needs_tesseract
+def test_code_fold_agrees_with_golden(synthetic_docs):
+    assert fold_mismatches(load_golden(ROOT / "synthetic/golden.yaml"), synthetic_docs) == []
 
 
 def test_golden_covers_every_built_file_on_both_dates():

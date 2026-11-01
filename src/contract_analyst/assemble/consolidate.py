@@ -92,14 +92,16 @@ def _ops_reliable(rec: DocumentRecord) -> bool:
     return not failed and all(op.status == ValueStatus.ACCEPTED for op in rec.ops)
 
 
-def _term_mode(clause: str | None, main_ops: list[AmendmentOp], reliable: bool) -> str:
+def _term_mode(clause: str | None, main_ops: list[AmendmentOp], reliable: bool,
+               suspensions: list[AmendmentOp] = ()) -> str:
     """How a supplement's value meets the current one: "replace", "combine" or "conflict".
 
-    A value is replaced only when an operation rewrites the clause it came from; operations on other clauses, or none
-    at all, add to it. If the operations could not be read, the change is a conflict, never a silent addition.
+    A value is replaced only when an operation rewrites or suspends the clause it came from; operations on other
+    clauses, or none at all, add to it. If the operations could not be read, the change is a conflict, never a silent
+    addition.
     """
     verdicts = [covers(op.target, clause) for op in main_ops]
-    if True in verdicts:
+    if True in verdicts or True in [covers(op.target, clause) for op in suspensions]:
         return "replace"
     if not reliable:
         return "conflict"
@@ -232,6 +234,8 @@ def consolidate(chain: ContractChain, records: dict[str, DocumentRecord], as_of:
         accepted_ops = [op for op in rec.ops if op.status == ValueStatus.ACCEPTED]
         main_ops = [op for op in accepted_ops
                     if op.op in REPLACING and not _other_document(op.target, chain.contract_number)]
+        suspensions = [op for op in accepted_ops
+                       if op.op == OpType.SUSPEND_PART and not _other_document(op.target, chain.contract_number)]
         restated = any(op.op == OpType.RESTATE_DOCUMENT for op in main_ops)
         if restated and (eff is None or eff <= as_of):
             state.reset()
@@ -239,7 +243,7 @@ def consolidate(chain: ContractChain, records: dict[str, DocumentRecord], as_of:
         for name, ext in rec.terms.items():
             if ext.status == ValueStatus.ACCEPTED:
                 mode = ("replace" if doc.role == "main" or restated
-                        else _term_mode(state.clause_of(name), main_ops, reliable))
+                        else _term_mode(state.clause_of(name), main_ops, reliable, suspensions))
                 state.set_term(name, ext, eff, doc.doc_id, as_of, mode=mode)
         rows = [row for row in rec.rates if row.status == ValueStatus.ACCEPTED]
         for row in sorted(rows, key=lambda r: r.valid_from or eff or date.min):

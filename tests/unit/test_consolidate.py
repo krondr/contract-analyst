@@ -188,3 +188,14 @@ def test_as_of_before_every_known_date_is_not_yet_in_force():
         "not_yet_in_force"
     assert run([rec("s", "D990000002-01", parent=MAIN, effective=date(2017, 1, 1))], date(2001, 1, 1)).status == \
         "not_yet_in_force"
+
+
+def test_suspension_of_a_named_clause_replaces_the_term_taken_from_it():
+    c = run([main(terms={"plan_indicators": ("не менее 40 новых клиентов в месяц", "1.1.1"),
+                         "subject": ("продвижение услуг", "2.1")}),
+             rec("s", "D990000002-01", parent=MAIN, effective=date(2026, 2, 16),
+                 terms={"plan_indicators": "не применяется с 01.03.2026",
+                        "subject": "приостановлено привлечение абонентов"},
+                 ops=[(OpType.SUSPEND_PART, "1.1.1", date(2026, 3, 1))])])
+    assert c.terms["plan_indicators"].current.value == "не применяется с 01.03.2026"
+    assert c.terms["subject"].current.value == "продвижение услуг; приостановлено привлечение абонентов"
