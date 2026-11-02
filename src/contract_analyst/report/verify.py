@@ -208,7 +208,7 @@ def verify_text(text: str, sources: Mapping[str, str], require_refs: bool = Fals
 
 def verify_claims(markdown: str, sources: Mapping[str, str]) -> tuple[str, int]:
     """Check every <!-- llm --> block of a rendered report; sources come from grounding(). A <!-- llm refs --> block
-    states facts about the contracts, so a sentence without a reference goes too (spec §6.3)."""
+    states facts about the contracts, so a sentence without a reference goes too (spec §6.6)."""
     total = 0
 
     def replace(match: re.Match[str]) -> str:
