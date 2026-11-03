@@ -1,4 +1,6 @@
 import json
+import sqlite3
+from contextlib import closing
 
 import pytest
 from pydantic import BaseModel
@@ -118,6 +120,17 @@ def test_thinking_turns_are_cached_apart_and_keep_reasoning(tmp_path):
     rec.chat(M, think=True)
     replay = CachingClient(ScriptedClient([]), db, "replay")
     assert replay.chat(M) == plain and replay.chat(M, think=True).reasoning == "думаю"
+
+
+def test_thinking_turn_is_stored_under_its_own_kind(tmp_path):
+    db = tmp_path / "c.sqlite"
+    cached = CachingClient(ScriptedClient(["a", "b", '{"a": 1}']), db, "record")
+    cached.chat(M)
+    cached.chat(M, think=True)
+    cached.structured(M, A)
+    with closing(sqlite3.connect(db)) as con:
+        kinds = sorted(kind for (kind,) in con.execute("SELECT kind FROM responses"))
+    assert kinds == ["chat", "chat+think", "structured"]
 
 
 class FakeStreamingLLM:

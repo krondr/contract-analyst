@@ -64,13 +64,14 @@ class CachingClient:
     def chat(self, messages: list[Message], tools: list[dict] | None = None, think: bool = False) -> AssistantTurn:
         if self.mode == "off":
             return self.inner.chat(messages, tools, think=think)
-        key = self._key("chat+think" if think else "chat", messages, tools, None)
+        kind = "chat+think" if think else "chat"
+        key = self._key(kind, messages, tools, None)
         if (cached := self._lookup(key)) is not None:
             return AssistantTurn.model_validate_json(cached)
         cut = self._truncated()
         turn = self.inner.chat(messages, tools, think=think)
         if self._truncated() == cut:  # an answer cut at the token cap is not kept: the next run asks again
-            self._put(key, "chat", turn.model_dump_json())
+            self._put(key, kind, turn.model_dump_json())
         return turn
 
     def structured(self, messages: list[Message], schema: type[BaseModel]) -> str:
