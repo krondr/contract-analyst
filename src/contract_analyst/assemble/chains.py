@@ -172,10 +172,12 @@ def build_chains(records: list[DocumentRecord]) -> list[ContractChain]:
                     continue
                 targets = find_doc_numbers(op.target)
                 target = targets[0] if targets else None
-                if op.op == OpType.INVALIDATE_DOCUMENT and target and target in by_doc:
+                # Terminating a supplement, not the contract itself, cancels that supplement like an invalidation.
+                cancels = op.op == OpType.INVALIDATE_DOCUMENT or (op.op == OpType.TERMINATE and key not in targets)
+                if cancels and target and target in by_doc:
                     by_doc[target].invalidated_by = r.doc_id
-                    issues.append(Issue(code="invalidated",
-                                        message=f"{target} признан недействительным документом {_value(r.number)}",
+                    done = "признан недействительным" if op.op == OpType.INVALIDATE_DOCUMENT else "расторгнут"
+                    issues.append(Issue(code="invalidated", message=f"{target} {done} документом {_value(r.number)}",
                                         sources=[s for s in [op.source] if s]))
                 elif target and target not in by_number:
                     issues.append(Issue(code="target_missing",

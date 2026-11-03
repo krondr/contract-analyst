@@ -148,6 +148,16 @@ def _summary(rec: DocumentRecord, doc: ChainDoc) -> str:
     return "; ".join(parts) or "дополнительное соглашение"
 
 
+def _repeat_key(text: str) -> str:
+    return " ".join(text.casefold().split()).rstrip(".,;:!? ")
+
+
+def _repeats(value: str, current: str) -> bool:
+    """The value is the current one or one of the values combined into it, up to case, spaces and final punctuation."""
+    key = _repeat_key(value)
+    return any(key == _repeat_key(part) for part in (current, *current.split("; ")))
+
+
 class _State:
     def __init__(self) -> None:
         self.terms: dict[str, TermState] = {}
@@ -196,7 +206,7 @@ class _State:
             self.terms[name], self.since[name] = TermState(name=name, current=ext), eff
             return
         current = state.current
-        if mode != "replace" and current.status == ValueStatus.ACCEPTED and ext.value in (current.value or ""):
+        if mode != "replace" and current.status == ValueStatus.ACCEPTED and _repeats(ext.value or "", current.value or ""):
             return
         if mode == "combine" and current.status == ValueStatus.ACCEPTED:
             state.current = ext.model_copy(update={
@@ -301,9 +311,9 @@ def consolidate(chain: ContractChain, records: dict[str, DocumentRecord], as_of:
                 state.drop_rate(row.label)
             else:
                 state.add_rate(row, eff, as_of)
-        for op in accepted_ops:
+        for op in accepted_ops:  # ending another document does not end the contract
             when = op.effective_from or eff
-            if op.op not in (OpType.TERMINATE, OpType.SUSPEND_PART):
+            if op.op not in (OpType.TERMINATE, OpType.SUSPEND_PART) or _other_document(op.target, chain.contract_number):
                 continue
             if when is None and refused:  # when it takes effect is unknown, so is whether it already has
                 if status != "terminated":
