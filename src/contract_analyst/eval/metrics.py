@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from collections.abc import Callable
+from contextlib import closing
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -13,9 +15,22 @@ from pydantic import BaseModel
 
 from contract_analyst.eval.golden import GoldenRate, GoldenSet
 from contract_analyst.ingest.normalize import normalize_text
+from contract_analyst.ingest.segment import segment_clauses
 from contract_analyst.kb.lemmatize import lemmatize
 from contract_analyst.kb.store import KnowledgeBase
-from contract_analyst.models import ConsolidatedContract, DocumentRecord, Extracted, TermState, ValueStatus
+from contract_analyst.models import (
+    ConsolidatedContract,
+    DocFormat,
+    DocumentRecord,
+    DocumentText,
+    Extracted,
+    InputFile,
+    Page,
+    PageMethod,
+    PageQuality,
+    TermState,
+    ValueStatus,
+)
 from contract_analyst.parsing.patterns import DOC_NUMBER_RE, find_dates
 
 SCALAR_FIELDS = {"number": "number", "doc_date": "doc_date", "effective_from": "effective_from"}
@@ -69,6 +84,10 @@ class Scores(BaseModel):
     rates_rows_acc: float = 0.0
     consolidation_misses: dict[str, int] = {}
     consolidation_miss_list: list[dict] = []
+    # The code fold on the golden documents themselves, scored the same way: a point lost with every value read
+    # right is lost by the fold code or the scoring, not the model.
+    golden_fold_acc: float = 0.0
+    golden_fold_misses: list[dict] = []
 
 
 def _norm_text(value) -> str:
@@ -445,6 +464,28 @@ def _usage(run_dir: Path) -> dict:
     return metrics
 
 
+def _kb_texts(kb_dir: Path) -> dict[str, DocumentText]:
+    """The documents' pages as the run stored them, cut into clauses by the reader's own segmentation: the golden
+    fold needs the clause each golden quote falls in, and a run's knowledge base is the texts score_run has. A base
+    saved before page texts were stored gives none."""
+    path = Path(kb_dir) / "kb.sqlite"
+    if not path.exists():
+        return {}
+    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'pages'").fetchone():
+            return {}
+        rows = db.execute("SELECT doc_id, page, text FROM pages ORDER BY doc_id, page").fetchall()
+    pages: dict[str, list[Page]] = {}
+    for doc_id, number, text in rows:
+        pages.setdefault(doc_id, []).append(Page(number=number, method=PageMethod.TEXT, text=text,
+                                                 quality=PageQuality(chars=len(text))))
+    # The base keeps page texts only: file metadata and page method are placeholders, clause_at reads the clauses.
+    return {doc_id: DocumentText(doc_id=doc_id, file=InputFile(path=doc_id, name=doc_id, sha256=doc_id,
+                                                               format=DocFormat.UNSUPPORTED, size_bytes=0),
+                                 pages=doc_pages, clauses=segment_clauses(doc_pages), status="ok")
+            for doc_id, doc_pages in pages.items()}
+
+
 def latest_full_run(runs_dir: Path) -> Path | None:
     """The newest finished run over the whole package. metrics.json is written last, so a run without it is still
     going or crashed; its scope says whether --chain or --doc limited the run (older runs did not record it)."""
@@ -460,6 +501,7 @@ def latest_full_run(runs_dir: Path) -> Path | None:
 
 def score_run(run_dir: Path, golden: GoldenSet, runs_at: dict[date, Path] | None = None) -> Scores:
     """Score a run; runs_at gives the run made for each golden date (an experiment runs every variant per date)."""
+    from contract_analyst.eval.golden_tools import golden_fold
     from contract_analyst.eval.traps import check_traps
 
     kb = KnowledgeBase(Path(run_dir) / "kb")
@@ -476,6 +518,7 @@ def score_run(run_dir: Path, golden: GoldenSet, runs_at: dict[date, Path] | None
     llm = usage.get("llm_usage", {})
     invalid = sum(1 for r in records.values() for i in r.issues if i.code in ("llm_invalid_json", "llm_truncated"))
     consolidation = _consolidation(golden, RunsAt(run_dir, runs_at))
+    fold = golden_fold(golden, _kb_texts(Path(run_dir) / "kb"))
     return Scores(
         doc_kind_acc=sum(kinds) / len(kinds) if kinds else 1.0,
         chain_acc=sum(chain_ok) / len(chain_ok) if chain_ok else 1.0,
@@ -489,7 +532,7 @@ def score_run(run_dir: Path, golden: GoldenSet, runs_at: dict[date, Path] | None
         json_valid_rate=1 - invalid / llm["calls"] if llm.get("calls") else 1.0,
         tool_call_valid_rate=usage["tool_call_valid_rate"], safety_net=usage.get("safety_net", []),
         rates_rows_acc=consolidation.rows_acc, consolidation_misses=consolidation.counts(),
-        consolidation_miss_list=consolidation.misses)
+        consolidation_miss_list=consolidation.misses, golden_fold_acc=fold.acc, golden_fold_misses=fold.misses)
 
 
 __all__ = ["Consolidation", "GoldenRate", "RunsAt", "Scores", "latest_full_run", "normalize_target", "same_value",

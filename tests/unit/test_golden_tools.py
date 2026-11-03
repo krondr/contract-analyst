@@ -29,8 +29,14 @@ def test_yaml_roundtrip_keeps_dates_and_decimals(tmp_path):
     assert back == gs and back.chains[0].rates_at[date(2026, 10, 30)][0].amount == Decimal("330.5")
 
 
-from contract_analyst.eval.golden import GoldenDocument, GoldenTrap, GoldenValue
-from contract_analyst.eval.golden_tools import build_review_page, check_golden, diff_golden, fold_mismatches
+from contract_analyst.eval.golden import GoldenDocument, GoldenOp, GoldenTrap, GoldenValue
+from contract_analyst.eval.golden_tools import (
+    build_review_page,
+    check_golden,
+    diff_golden,
+    fold_mismatches,
+    golden_fold,
+)
 
 PAGE = "Договор № D990000001-01\nг. Тверь 19.08.2020 г.\nСтавка составляет 500 рублей без НДС."
 
@@ -194,3 +200,92 @@ def test_fold_check_reads_clauses_from_the_documents():
     docs = {"d1": text_doc([main_page], doc_id="d1"), "d2": text_doc([sup_page], doc_id="d2")}
     assert fold_mismatches(gs, docs) == []
     assert fold_mismatches(gs) != []  # without the texts no clause is known and the supplement replaces
+
+
+# --- the code fold on the golden set itself, scored like a run ------------------------------------------------------
+
+AS_OF = date(2026, 10, 30)
+MAIN_TEXT = ("Договор № D990000001-01\nг. Тверь 19.08.2020 г.\n3.1. Ставка составляет 500 рублей без НДС.\n"
+             "12.1. Уведомления направляются по факсу в течение 3 дней.\n"
+             "12.2. Копии по электронной почте имеют силу оригинала.")
+SUP_TEXT = ("Дополнительное соглашение № D990000002-01 к Договору № D990000001-01 от 19.08.2020\n"
+            "1. Изложить пункт 12.2 Договора в редакции: копии через ЭДО в течение 1 дня имеют силу оригинала.\n"
+            "2. Изложить пункт 3.1 Договора в редакции: с 01.01.2024 ставка составляет 700 рублей без НДС.")
+COMBINED = "по факсу в течение 3 дней; копии через ЭДО в течение 1 дня"
+
+
+def _amended(label="Ставка"):
+    """A contract and a supplement from 01.01.2024 that rewrites clauses 12.2 and 3.1; the new rate is `label`."""
+    main = _gdoc(terms={"notification_channel": GoldenValue(value="по факсу в течение 3 дней", page=1,
+                                                            quote="Уведомления направляются по факсу в течение 3 дней.")},
+                 rates=[GoldenRate(label="Ставка", amount=Decimal(500), vat="excluded", valid_from=date(2020, 8, 19),
+                                   page=1, quote="Ставка составляет 500 рублей без НДС.")])
+    sup = _gdoc(file="s.pdf", doc_id="d2", kind="supplement",
+                number=GoldenValue(value="D990000002-01", page=1, quote="Дополнительное соглашение № D990000002-01"),
+                doc_date=GoldenValue(status="absent"),
+                parent_number=GoldenValue(value="D990000001-01", page=1, quote="к Договору № D990000001-01"),
+                effective_from=GoldenValue(value="2024-01-01", page=1, quote="С 01.01.2024"),
+                terms={"notification_channel": GoldenValue(value="копии через ЭДО в течение 1 дня", page=1,
+                                                           quote="копии через ЭДО в течение 1 дня")},
+                rates=[GoldenRate(label=label, amount=Decimal(700), vat="excluded", valid_from=date(2024, 1, 1),
+                                  page=1, quote="с 01.01.2024 ставка составляет 700 рублей без НДС.")],
+                ops=[GoldenOp(op="replace_clause", target="12.2"), GoldenOp(op="replace_clause", target="3.1")])
+    in_force = [GoldenRate(label=label, amount=Decimal(700), vat="excluded", valid_from=date(2024, 1, 1))]
+    chain = GoldenChain(contract_number="D990000001-01", main_doc_id="d1", order=["d1", "d2"],
+                        status_at={AS_OF: "active"}, rates_at={AS_OF: in_force},
+                        terms_at={AS_OF: {"notification_channel": COMBINED}})
+    return _gs(documents=[main, sup], chains=[chain])
+
+
+def _texts():
+    return {"d1": text_doc([MAIN_TEXT], doc_id="d1"), "d2": text_doc([SUP_TEXT], doc_id="d2")}
+
+
+def test_golden_fold_of_a_correct_golden_set_is_perfect():
+    fold = golden_fold(_amended(), _texts())
+    assert (fold.acc, fold.misses) == (1.0, [])
+
+
+def test_golden_fold_without_the_texts_cannot_tell_an_addition_from_a_replacement():
+    """The golden set gives a value's page and quote, not its clause: without the text the supplement's value
+    replaces the contract's instead of joining it (fold_mismatches sees the same)."""
+    fold = golden_fold(_amended())
+    assert fold.acc == 2 / 3
+    assert [(m["point"], m["reason"], m["expected"], m["got"]) for m in fold.misses] == [
+        ("terms.notification_channel", "term_different", "3; 1", "1")]
+
+
+def test_golden_fold_retires_a_rewritten_clause_s_rate_by_its_source_as_a_run_s_fold_does():
+    """A run's rate rows carry the clause they were read from, so clause 3.1 in new wording takes the old rate along
+    even when the new one has another label: the golden rows need that source too."""
+    fold = golden_fold(_amended(label="Арендная плата"), _texts())
+    assert (fold.acc, fold.misses) == (1.0, [])
+
+
+def test_golden_fold_dates_a_row_without_its_own_period_by_its_document_like_a_run():
+    """The scoring gives a folded row without its own period its document's (2020-08-19 here) but leaves a golden
+    chain row as written, so this point is lost however well the documents are read; fold_mismatches compares the
+    raw rows and does not see it."""
+    fold = golden_fold(_gs())
+    assert fold.acc == 0.5 and fold_mismatches(_gs()) == []
+    assert [(m["point"], m["reason"], m["expected"], m["got"]) for m in fold.misses] == [
+        ("rates", "rates_period", "500 unknown …–…", "500 unknown 2020-08-19–…")]
+
+
+def _run_with_texts(run_dir, documents):
+    """A finished run's knowledge base holding only the documents' page texts."""
+    from contract_analyst.kb.store import KnowledgeBase
+
+    KnowledgeBase(run_dir / "kb").save(documents=documents, records={}, chains=[], consolidated={}, clusters=[],
+                                       decisions=[])
+    return run_dir
+
+
+def test_scores_carry_the_golden_fold_with_the_texts_the_run_stored(tmp_path):
+    from contract_analyst.eval.metrics import score_run
+
+    s = score_run(_run_with_texts(tmp_path / "texts", _texts()), _amended())
+    assert (s.golden_fold_acc, s.golden_fold_misses) == (1.0, [])
+    assert s.consolidation_acc == 0.0  # the run itself folded nothing: the golden fold does not depend on it
+    bare = score_run(_run_with_texts(tmp_path / "bare", {}), _amended())  # no page texts: clauses unknown
+    assert bare.golden_fold_acc == 2 / 3 and [m["reason"] for m in bare.golden_fold_misses] == ["term_different"]

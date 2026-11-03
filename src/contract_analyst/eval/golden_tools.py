@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import cv2
 
-from contract_analyst.eval.golden import GoldenDocument, GoldenSet, GoldenValue
-from contract_analyst.models import DocKind, DocumentText, PageMethod
+from contract_analyst.eval.golden import GoldenDocument, GoldenRate, GoldenSet, GoldenValue
+from contract_analyst.models import (
+    ConsolidatedContract,
+    DocKind,
+    DocumentRecord,
+    DocumentText,
+    PageMethod,
+    Source,
+)
 from contract_analyst.ocr.render import render_page
 from contract_analyst.parsing.header import detect_draft, parse_header
 
@@ -72,8 +80,8 @@ import random as _random
 
 from pydantic import BaseModel as _BaseModel
 
+from contract_analyst.eval.metrics import Consolidation, normalize_target, score_consolidation
 from contract_analyst.eval.metrics import _rate_set as _rate_key  # one rate key for scoring, diff and check
-from contract_analyst.eval.metrics import normalize_target
 from contract_analyst.eval.metrics import similar_text as _similar
 from contract_analyst.eval.text_metrics import cer
 
@@ -295,6 +303,44 @@ def fold_mismatches(gs: GoldenSet, docs: dict[str, DocumentText] | None = None) 
     return items
 
 
+def _with_rate_sources(record: DocumentRecord, doc: GoldenDocument, text: DocumentText | None) -> DocumentRecord:
+    """The record with each rate's source, as the gate gives a run's rows: the fold retires a rewritten clause's
+    rates by it and the scoring dates a row without its own period by its document. fold_mismatches keeps its
+    sourceless rows."""
+    from contract_analyst.gate.gate import clause_at
+
+    def source(rate: GoldenRate) -> Source:
+        clause = clause_at(text, rate.page, rate.quote) if text is not None and rate.page and rate.quote else None
+        return Source(doc_id=doc.doc_id, page=rate.page or 1, quote=rate.quote or "", clause_id=clause)
+
+    return record.model_copy(update={"rates": [row.model_copy(update={"source": source(rate)})
+                                               for row, rate in zip(record.rates, doc.rates, strict=True)]})
+
+
+def golden_fold(gs: GoldenSet, docs: dict[str, DocumentText] | None = None) -> Consolidation:
+    """The code fold run on the golden documents themselves, scored the way a run's fold is (score_consolidation).
+
+    Every value is read right, so a point lost here is lost by the fold code or by the scoring, never by the model.
+    docs are the documents' texts: the golden set gives a value's page and quote, and the clause they fall in decides
+    whether a supplement's value replaces the contract's or joins it. A document without its text keeps its clauses
+    unknown, as in fold_mismatches.
+    """
+    from contract_analyst.assemble.chains import build_chains
+    from contract_analyst.assemble.consolidate import consolidate
+
+    records: dict[str, DocumentRecord] = {}
+    for doc in gs.documents:
+        text = (docs or {}).get(doc.doc_id)
+        records[doc.doc_id] = _with_rate_sources(_to_record(doc, text), doc, text)
+    built = {c.contract_number: c for c in build_chains(list(records.values()))}
+
+    def fold(number: str, when: date) -> ConsolidatedContract | None:
+        chain = built.get(number)
+        return consolidate(chain, records, when) if chain is not None else None
+
+    return score_consolidation(gs, fold, records)
+
+
 _PAGE_STYLE = """
 body{font-family:-apple-system,Segoe UI,sans-serif;margin:16px;color:#1f2328;background:#fff}
 table{border-collapse:collapse;width:100%}td,th{border:1px solid #d0d7de;padding:6px;vertical-align:top;font-size:14px}
@@ -346,4 +392,4 @@ def diffs_to_json(diffs: list[GoldenDiff]) -> str:
 
 
 __all__ = ["GoldenDiff", "build_review_page", "check_golden", "diff_golden", "diffs_to_json", "dump_texts", "fold_mismatches",
-           "prefill"]
+           "golden_fold", "prefill"]
