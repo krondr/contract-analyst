@@ -264,6 +264,10 @@ def _stated_start(quote: str | None) -> str | None:
 
 
 def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
+    if op.op == OpType.INVALIDATE_DOCUMENT and (op.effective_from or op.effective_to):
+        # The fold cancels an invalidated document outright and never dates it, so a date the model attached (often the
+        # cancelled document's own, «… № … от «02» февраля») is neither checked nor kept: it cannot cost the operation.
+        op = op.model_copy(update={"effective_from": None, "effective_to": None})
     if not op.effective_from and op.op != OpType.INVALIDATE_DOCUMENT and (stated := _stated_start(op.quote)):
         op = op.model_copy(update={"effective_from": stated})
     eff_from, eff_to = _iso(op.effective_from), _iso(op.effective_to)

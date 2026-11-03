@@ -565,3 +565,15 @@ def test_percent_written_with_the_amount_in_words_keeps_its_unit(sentence, amoun
     r = gate_rate(RateOut(label="Вознаграждение Агента", amount=amount, page=1, quote=sentence),
                   text_doc([f"4.1. {sentence}."]), load_settings())
     assert (r.status, r.unit) == ("accepted", unit)
+
+
+def test_an_invalidation_keeps_no_date_because_the_fold_never_dates_one():
+    """«Признать ДС № … от «02» февраля 2026 г. недействительным»: the date is the cancelled document's own; a date the
+    model attaches to an invalidation is not used by the fold and must not cost the operation itself."""
+    text = ("1. Признать Дополнительное соглашение № D990000003-01 от «02» февраля 2026 г. о расторжении Договора "
+            "недействительным.")
+    op = OpOut(op="invalidate_document", target="D990000003-01", effective_from="2026-02-02", page=1,
+               quote="Признать Дополнительное соглашение № D990000003-01 от «02» февраля 2026 г. о расторжении Договора "
+                     "недействительным")
+    r = gate_op(op, text_doc([text]), load_settings())
+    assert (r.status, r.effective_from, r.effective_to) == ("accepted", None, None)
