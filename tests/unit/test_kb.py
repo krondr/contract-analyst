@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import date
 from decimal import Decimal
 
@@ -45,6 +46,26 @@ def test_roundtrip_and_inflected_search(tmp_path):
     assert contract["contract_number"] == MAIN and contract["status"] == "active"
     hits = kb.search_clauses("ставкой вознаграждения")
     assert hits[0].clause_id == "3.1" and hits[0].contract_number == MAIN and hits[0].page == 1
+
+
+def _closed(db: sqlite3.Connection) -> bool:
+    try:
+        db.execute("SELECT 1")
+    except sqlite3.ProgrammingError:
+        return True
+    return False
+
+
+def test_every_connection_opened_by_save_and_search_is_closed(tmp_path, monkeypatch):
+    opened = []
+    connect = sqlite3.connect
+    monkeypatch.setattr(sqlite3, "connect", lambda *args, **kwargs: opened.append(connect(*args, **kwargs)) or opened[-1])
+    kb = KnowledgeBase(tmp_path)
+    kb.save(**small_run())
+    kb.save(**small_run())  # deletes the file the first save wrote: Windows refuses while a connection holds it
+    assert kb.search_clauses("ставкой вознаграждения") and kb.sources()
+    assert len(opened) == 4
+    assert [_closed(db) for db in opened] == [True] * 4
 
 
 def test_search_can_filter_by_contract(tmp_path):
