@@ -88,6 +88,22 @@ def test_gate_op_invalidation_target_must_be_quoted(doc):
     assert gate_op(OpOut(op="invalidate_document", target="D990000009-01", page=1, quote=quote), doc, s).status == "rejected"
 
 
+@pytest.mark.parametrize(("op", "text"), [
+    ("terminate", "1. Расторгнуть Дополнительное соглашение № D990000003-01 с 01.05.2026."),
+    ("suspend_part", "1. Прекратить с 01.05.2026 привлечение абонентов по Дополнительному соглашению № D990000003-01.")])
+def test_ending_operation_target_number_must_be_quoted(op, text):
+    quote = text.split(". ", 1)[1].rstrip(".")
+
+    def ending(target):
+        return gate_op(OpOut(op=op, target=target, effective_from="2026-05-01", page=1, quote=quote), text_doc([text]),
+                       load_settings())
+
+    assert ending("D990000003-01").status == "accepted"
+    wrong = ending("D990000004-01")
+    assert wrong.status == "rejected" and wrong.reason.startswith("value_not_in_quote")
+    assert ending("Дополнительное соглашение").status == "accepted"
+
+
 def test_rate_quote_reanchored_to_the_line_with_label_and_amount(doc):
     row = gate_rate(RateOut(label="Тариф А", amount="700", page=1, quote="Тариф А"), doc, load_settings())
     assert row.status == "accepted" and "700" in row.source.quote and row.reason == "quote_reanchored"

@@ -301,9 +301,9 @@ def consolidate(chain: ContractChain, records: dict[str, DocumentRecord], as_of:
                 state.drop_rate(row.label)
             else:
                 state.add_rate(row, eff, as_of)
-        for op in accepted_ops:
+        for op in accepted_ops:  # ending another document does not end the contract
             when = op.effective_from or eff
-            if op.op not in (OpType.TERMINATE, OpType.SUSPEND_PART):
+            if op.op not in (OpType.TERMINATE, OpType.SUSPEND_PART) or _other_document(op.target, chain.contract_number):
                 continue
             if when is None and refused:  # when it takes effect is unknown, so is whether it already has
                 if status != "terminated":

@@ -123,3 +123,16 @@ def test_supplement_dated_before_its_contract_is_flagged():
                              rec("t", "D990000003-01", parent=MAIN, effective=date(2023, 1, 1))])
     flagged = [i for i in chain.issues if i.code == "supplement_before_main"]
     assert len(flagged) == 1 and "D990000002-01" in flagged[0].message
+
+
+def test_terminated_supplement_is_marked_like_an_invalidated_one():
+    m = rec("m", MAIN, kind="main", doc_date=date(2022, 8, 23))
+    a = rec("a", "D990000002-01", parent=MAIN, doc_date=date(2024, 2, 14))
+    b = rec("b", "D990000003-01", parent=MAIN, doc_date=date(2024, 3, 1),
+            ops=[(OpType.TERMINATE, "Дополнительное соглашение № D990000002-01", date(2024, 4, 1))])
+    (chain,) = build_chains([m, a, b])
+    assert {d.doc_id: d.invalidated_by for d in chain.docs} == {"m": None, "a": "b", "b": None}
+    assert "invalidated" in codes(chain)
+    c = rec("c", "D990000004-01", parent=MAIN, doc_date=date(2024, 5, 1), ops=[(OpType.TERMINATE, MAIN, date(2024, 6, 1))])
+    (chain,) = build_chains([m, a, c])
+    assert all(d.invalidated_by is None for d in chain.docs)

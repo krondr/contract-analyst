@@ -41,7 +41,7 @@ from contract_analyst.models import (
     Source,
     ValueStatus,
 )
-from contract_analyst.parsing.patterns import date_spans, find_numbers, parse_money
+from contract_analyst.parsing.patterns import date_spans, find_doc_numbers, find_numbers, parse_money
 from contract_analyst.understand.schemas import OpOut, RateOut
 
 # The evidence fits more than one reading, or the period is not tied to the value: doubtful rather than wrong.
@@ -289,6 +289,10 @@ def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
         if op.op == OpType.INVALIDATE_DOCUMENT:
             yield check_value_in_quote(op.target or "", op.quote, "doc_number")
             yield check_value_on_page(op.target or "", "doc_number", page, spans, threshold)
+        if op.op in (OpType.TERMINATE, OpType.SUSPEND_PART):  # the fold reads which document ends from these numbers
+            for number in find_doc_numbers(op.target or ""):
+                yield check_value_in_quote(number, op.quote, "doc_number")
+                yield check_value_on_page(number, "doc_number", page, spans, threshold)
         yield check_operative_wording(op.op, page, spans)
         if op.op == OpType.TERMINATE and base["effective_from"] is None:
             yield CheckResult(ok=False, code="terminate_without_date", reason="у расторжения не указана дата")
