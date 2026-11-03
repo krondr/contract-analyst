@@ -3,6 +3,8 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from contract_analyst.config import load_settings
 from contract_analyst.ingest.inventory import list_inputs
 from contract_analyst.ingest.reader import read_document
@@ -231,3 +233,40 @@ def test_entry_into_force_from_signing_leaves_the_start_to_the_signing_date():
     rec = _understand(doc, [_header_json(kind="supplement", effective_from=filled_in)], groups=["header"])
     assert (rec.effective_from.status, rec.effective_from.reason) == ("absent", "from_signing")
 
+
+
+# --- the agreement an operation changes (fix/wrong-values-p4) -----------------------------------------------------
+
+def _parent(number, quote):
+    from contract_analyst.models import Extracted, ParentRef, Source
+
+    return Extracted(value=ParentRef(number=number), status="accepted", source=Source(doc_id="d", page=1, quote=quote))
+
+
+_DEFINES = text_doc([("Дополнительное соглашение № D990000009-01 к Договору № D990000001-01 от 19.08.2020 г.\n"
+                      "Стороны заключили настоящее дополнительное соглашение (далее - «Соглашение») к договору "
+                      "№ D990000001-01 от 19.08.2020 г. (далее - «Договор») и дополнительному соглашению "
+                      "№ D990000005-01 от 29.08.2020 г. (далее – «Соглашение») о нижеследующем:\n"
+                      "1. Изложить п. 1 – п. 14 Соглашения в следующей редакции.")])
+_PLAIN = text_doc([("Дополнительное соглашение № D990000009-01 к Соглашению № D990000005-01 от 29.08.2020 г.\n"
+                    "1. Изложить п. 1 – п. 14 Соглашения в следующей редакции.")])
+_TO_CONTRACT = _parent("D990000001-01", "к Договору № D990000001-01 от 19.08.2020 г.")
+_TO_AGREEMENT = _parent("D990000005-01", "к Соглашению № D990000005-01 от 29.08.2020 г.")
+
+
+@pytest.mark.parametrize("target, doc, parent, expected", [
+    ("п. 1–14 Соглашения", _PLAIN, _TO_AGREEMENT, "п. 1–14 Соглашения № D990000005-01"),
+    ("п. 1–14 Соглашения", _DEFINES, _TO_CONTRACT, "п. 1–14 Соглашения № D990000005-01"),
+    ("п. 3 настоящего Соглашения", _PLAIN, _TO_AGREEMENT, "п. 3 настоящего Соглашения"),
+    ("п. 5 Договора", _PLAIN, _TO_AGREEMENT, "п. 5 Договора"),
+    ("п. 2 Соглашения № D990000007-01", _PLAIN, _TO_AGREEMENT, "п. 2 Соглашения № D990000007-01"),
+    ("п. 1–14 Соглашения", _PLAIN, _TO_CONTRACT, "п. 1–14 Соглашения"),
+], ids=["parent_is_the_agreement", "agreement_defined_in_the_text", "this_agreement", "the_contract", "numbered",
+        "parent_is_the_contract"])
+def test_an_operation_on_an_agreement_names_which_one(target, doc, parent, expected):
+    """«п. 1–14 Соглашения» with no number would be applied to the contract itself. The number is the one the text
+    defines as «Соглашение», or the parent's when the document calls its parent an agreement; a parent that is the
+    contract does not name the agreement."""
+    from contract_analyst.understand.understand import name_amended_agreement
+
+    assert name_amended_agreement(target, doc, parent) == expected

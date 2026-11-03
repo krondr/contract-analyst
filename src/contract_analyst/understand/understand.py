@@ -10,6 +10,7 @@ import httpx
 from contract_analyst.config import Settings
 from contract_analyst.gate.checks import check_quote_present
 from contract_analyst.gate.gate import Candidate, apply_gate, gate_op, gate_rate
+from contract_analyst.ingest.normalize import normalize_text
 from contract_analyst.llm.client import LLMClient, Message
 from contract_analyst.llm.prompts import load_prompt
 from contract_analyst.llm.structured import StructuredFailure, call_structured
@@ -28,6 +29,7 @@ from contract_analyst.models import (
     ValueStatus,
 )
 from contract_analyst.parsing.header import HeaderGuess, detect_draft
+from contract_analyst.parsing.patterns import find_doc_numbers
 from contract_analyst.understand.routing import select_clauses, select_term_clauses
 from contract_analyst.understand.schemas import DatesOut, HeaderOut, OpsOut, RatesOut, TermsOut, ValueOut
 
@@ -72,6 +74,34 @@ def _gate_value(field: str, out: ValueOut, kind: str, doc: DocumentText, setting
         # an absent start. A refused start would turn the document's changes into conflicts instead.
         return _absent("from_signing")
     return gated
+
+
+# «… и дополнительному соглашению № D990000004-01 от 29.08.2020 г. (далее – «Соглашение»)»: the agreement that
+# «Соглашения» in an operation means. «настоящее соглашение (далее – «Соглашение»)» states no number.
+_AGREEMENT_DEFINED = re.compile(r"соглашени\w*\s*№\s*(?P<number>\S+)[^()]{0,40}?\(\s*далее\s*[-–—]?\s*[«\"]Соглашени[ея][»\"]",
+                                re.IGNORECASE)
+_TO_AGREEMENT = re.compile(r"\bк\s+(?:[а-яё-]+\s+){0,2}соглашени", re.IGNORECASE)
+_THIS_AGREEMENT = re.compile(r"настоящ\w*\s+(?:[а-яё-]+\s+)?соглашени", re.IGNORECASE)
+# Operations on clauses and appendices; a termination or an invalidation names its document in its own sentence.
+_ON_CLAUSES = {OpType.REPLACE_CLAUSE, OpType.DELETE_CLAUSE, OpType.REPLACE_APPENDIX, OpType.RESTATE_SECTION,
+               OpType.ADD_CLAUSE}
+
+
+def name_amended_agreement(target: str | None, doc: DocumentText, parent: Extracted | None) -> str | None:
+    """«п. 1–14 Соглашения» without a number would be applied to the contract itself. The number is the one the text
+    defines as «Соглашение», else the parent's when the document calls its parent an agreement («к Соглашению № …»).
+    A parent that is the contract does not say which agreement is meant, so the target stays as it is."""
+    if (not target or find_doc_numbers(target) or not re.search(r"соглашени", target, re.IGNORECASE)
+            or _THIS_AGREEMENT.search(target)):
+        return target
+    text = normalize_text("\n".join(p.text for p in doc.pages))
+    defined = {n for m in _AGREEMENT_DEFINED.finditer(text) for n in find_doc_numbers(m["number"])}
+    if len(defined) == 1:
+        return f"{target} № {defined.pop()}"
+    number = getattr(parent.value, "number", parent.value) if parent and parent.status == ValueStatus.ACCEPTED else None
+    if number and parent.source and _TO_AGREEMENT.search(parent.source.quote or ""):
+        return f"{target} № {number}"
+    return target
 
 
 def _merge(regex: Extracted[str] | None, llm: Extracted[str] | None) -> Extracted[str]:
@@ -186,6 +216,9 @@ def _run_group(acc: _Acc, doc: DocumentText, group: str, client: LLMClient, sett
                     acc.rates.append(gated)
         elif group == "ops":
             for op in out.ops:
+                if op.op in _ON_CLAUSES:
+                    op = op.model_copy(update={"target": name_amended_agreement(
+                        op.target, doc, acc.header_values.get("parent_number"))})
                 page = _resolve_page(doc, op.quote, op.page, settings)
                 gated = gate_op(op.model_copy(update={"page": page or op.page}), doc, settings)
                 if all((o.op, o.target, o.source) != (gated.op, gated.target, gated.source) for o in acc.ops):
