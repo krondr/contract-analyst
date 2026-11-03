@@ -593,3 +593,11 @@ def test_a_percentage_has_no_vat_even_under_a_vat_header():
     assert (percent.status, percent.unit, percent.vat) == ("accepted", "%", "unknown")
     assert (rubles.status, rubles.unit, rubles.vat) == ("accepted", "RUB", "excluded")
 
+
+
+def test_a_zero_amount_is_refused_not_corrected():
+    """«60%» misread as «б0%» on a scan: the code does not turn the letter back into a digit."""
+    scan = text_doc(["- в размере б0%% от оплаченных начислений по пакетному предложению за каждого Клиента"])
+    row = gate_rate(RateOut(label="Услуги Агента", amount="0", page=1,
+                            quote="в размере б0%% от оплаченных Клиентом начислений"), scan, load_settings())
+    assert row.status != "accepted" and row.reason.split(":")[0] == "zero_amount"

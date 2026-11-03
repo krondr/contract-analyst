@@ -230,6 +230,8 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
 
     def checks() -> Iterator[CheckResult]:
         yield check_not_redacted(row.quote, row.amount)
+        if amount == 0:  # «60%» read as «б0%»: the letter is not turned back into a digit, that would be a guess
+            yield CheckResult(ok=False, code="zero_amount", reason="сумма 0 — скорее всего, ошибка распознавания")
         if _PENALTY.search(row.label or "") or (_PENALTY.search(row.quote or "") and not _PRICE.search(row.quote or "")):
             yield CheckResult(ok=False, code="not_a_rate", reason="штраф или неустойка — это условие о штрафах, не ставка")
         if len(places) > 1:
