@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import date
 from pathlib import Path
 
@@ -81,7 +82,7 @@ class KnowledgeBase:
         contract_of = {d.doc_id: c.contract_number for c in chains for d in c.docs}
         db_path = self.root / "kb.sqlite"
         db_path.unlink(missing_ok=True)
-        with sqlite3.connect(db_path) as db:
+        with closing(sqlite3.connect(db_path)) as db, db:  # the connection's own context only commits
             db.execute("CREATE VIRTUAL TABLE clauses USING fts5(doc_id UNINDEXED, contract_number UNINDEXED, "
                        "clause_id UNINDEXED, page UNINDEXED, text, lemmas)")
             db.executemany("INSERT INTO clauses VALUES (?, ?, ?, ?, ?, ?)", [
@@ -146,7 +147,7 @@ class KnowledgeBase:
         sql = ("SELECT doc_id, contract_number, clause_id, page, substr(text, 1, 300), bm25(clauses) FROM clauses "
                "WHERE lemmas MATCH ?" + (" AND contract_number = ?" if contract else "") + " ORDER BY bm25(clauses) LIMIT ?")
         params = [match, *([contract] if contract else []), limit]
-        with sqlite3.connect(self.root / "kb.sqlite") as db:
+        with closing(sqlite3.connect(self.root / "kb.sqlite")) as db:
             rows = db.execute(sql, params).fetchall()
         return [ClauseHit(doc_id=r[0], contract_number=r[1], clause_id=r[2], page=int(r[3]), snippet=r[4], score=-r[5])
                 for r in rows]
@@ -156,7 +157,7 @@ class KnowledgeBase:
         texts = {}
         path = self.root / "kb.sqlite"
         if path.exists():
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db:
                 if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'pages'").fetchone():
                     texts = {(d, p): t for d, p, t in db.execute("SELECT doc_id, page, text FROM pages")}
         # A base saved before page texts were stored still has its references; only its values can back claims.

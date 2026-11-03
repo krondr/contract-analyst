@@ -8,9 +8,9 @@ from pathlib import Path
 import jinja2
 from pydantic import BaseModel
 
-from contract_analyst.config import REPO_ROOT
+from contract_analyst.config import resource_path
 
-PROMPTS_DIR = REPO_ROOT / "prompts"
+PROMPTS_DIR = resource_path("prompts")
 _ENV = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=False, autoescape=False)
 
 

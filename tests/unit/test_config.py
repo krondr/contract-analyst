@@ -8,6 +8,53 @@ def test_defaults_and_overrides():
     assert load_settings(llm_model="ollama:qwen3:14b").llm_model == "ollama:qwen3:14b"
 
 
+def test_code_defaults_equal_the_yaml_for_every_key(monkeypatch):
+    import os
+
+    import yaml
+
+    from contract_analyst.config import DEFAULT_CONFIG, Settings
+
+    for name in [n for n in os.environ if n.startswith("CA_")]:
+        monkeypatch.delenv(name)
+    keys = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    assert set(keys) <= set(Settings.model_fields)
+    defaults, from_yaml = Settings(), load_settings()
+    assert {k: getattr(defaults, k) for k in keys} == {k: getattr(from_yaml, k) for k in keys}
+
+
+def test_installed_without_the_repo_settings_and_prompts_come_from_the_package(tmp_path):
+    """Lay the package out as the wheel does (the module plus what pyproject.toml force-includes), with no config/
+    or prompts/ at the would-be repo root, and load both in a clean interpreter."""
+    import json
+    import shutil
+    import subprocess
+    import sys
+    import tomllib
+
+    from contract_analyst.config import REPO_ROOT
+    from contract_analyst.llm.prompts import load_prompt
+
+    site = tmp_path / "site-packages"
+    shutil.copytree(REPO_ROOT / "src" / "contract_analyst", site / "contract_analyst",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    build = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["hatch"]["build"]
+    for source, target in build["targets"]["wheel"]["force-include"].items():
+        shutil.copytree(REPO_ROOT / source, site / target)
+    probe = ("import json, sys; sys.path.insert(0, sys.argv[1])\n"
+             "from contract_analyst.config import REPO_ROOT, load_settings\n"
+             "from contract_analyst.llm.prompts import load_prompt\n"
+             "print(json.dumps({'root': str(REPO_ROOT), 'settings': load_settings().model_dump(mode='json'),\n"
+             "                  'chat': load_prompt('chat').model_dump()}))")
+    out = subprocess.run([sys.executable, "-I", "-c", probe, str(site)], cwd=tmp_path, capture_output=True,
+                         text=True, check=False)
+    assert out.returncode == 0, out.stderr
+    loaded = json.loads(out.stdout)
+    assert loaded["root"] == str(tmp_path.resolve()) and not (tmp_path / "config").exists()
+    assert loaded["settings"] == load_settings().model_dump(mode="json")
+    assert loaded["chat"] == load_prompt("chat").model_dump()
+
+
 def test_every_llm_call_is_bounded_by_default():
     s = load_settings()
     # A capped answer plus a full clause batch still fits the context window, so the cap ends a runaway answer

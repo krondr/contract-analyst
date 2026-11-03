@@ -48,6 +48,39 @@ def test_memory_survives_a_new_session_object(tmp_path):
     assert "Привет" in json.dumps(client.calls[0]["messages"], ensure_ascii=False)
 
 
+def test_each_chat_launch_starts_a_new_dialog_and_the_printed_id_continues_one(tmp_path, monkeypatch):
+    import re
+
+    from typer.testing import CliRunner
+
+    from contract_analyst.cli import app
+    from contract_analyst.llm import factory
+
+    base = kb(tmp_path)
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps([{"chat": {"content": "Ставка 500 рублей [doc:m:p1].", "tool_calls": []}}]),
+                      encoding="utf-8")
+    clients = []  # the scripted client of each launch, to see what the model was sent
+    build = factory.get_llm_client
+    monkeypatch.setattr(factory, "get_llm_client", lambda *args: clients.append(build(*args)) or clients[-1])
+
+    def launch(question, *options):
+        res = CliRunner().invoke(app, ["chat", str(base.root), "--model", f"scripted:{script}", *options],
+                                 input=f"{question}\n\n")
+        assert res.exit_code == 0, (res.output, res.exception)
+        return res.output
+
+    def asked(client):
+        return [m["content"] for m in client.calls[0]["messages"] if m["role"] == "user"]
+
+    first = launch("Какая ставка?")
+    launch("А он действует?")
+    assert asked(clients[1]) == ["А он действует?"]
+    thread = re.search(r"--thread (\S+)", first).group(1)
+    launch("Что я спросил?", "--thread", thread)
+    assert asked(clients[2]) == ["Какая ставка?", "Что я спросил?"]
+
+
 def test_unsupported_number_removed_and_empty_answer_becomes_refusal(tmp_path):
     session = ChatSession(kb(tmp_path), ScriptedClient([AssistantTurn(content="Срок истекает в 2030 году.")]),
                           load_settings(), tmp_path / "chat.sqlite")
