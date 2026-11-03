@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -14,19 +15,30 @@ class ScriptExhausted(RuntimeError):
     pass
 
 
+@dataclass
+class Truncated:
+    """A script entry for an answer cut at the token cap: counted in usage["truncated"], as the real clients do."""
+
+    answer: AssistantTurn | str
+
+
 class ScriptedClient:
     model_name = "scripted"
 
-    def __init__(self, script: list[AssistantTurn | str]):
+    def __init__(self, script: list[AssistantTurn | str | Truncated]):
         self._script = list(script)
-        self.usage = new_usage()
+        self.usage = new_usage() | {"truncated": 0}
         self.calls: list[dict] = []
 
     def _next(self) -> AssistantTurn | str:
         if not self._script:
             raise ScriptExhausted("scripted client has no more responses")
         self.usage["calls"] += 1
-        return self._script.pop(0)
+        item = self._script.pop(0)
+        if isinstance(item, Truncated):
+            self.usage["truncated"] += 1
+            return item.answer
+        return item
 
     def chat(self, messages: list[Message], tools: list[dict] | None = None, think: bool = False) -> AssistantTurn:
         self.calls.append({"kind": "chat", "messages": messages, "tools": tools, "think": think})

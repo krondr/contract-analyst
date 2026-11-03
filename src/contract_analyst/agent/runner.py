@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -13,7 +14,7 @@ from pydantic import BaseModel
 
 from contract_analyst.agent.context import RunContext
 from contract_analyst.agent.trace import TraceLogger, read_trace, thought_coverage
-from contract_analyst.config import Settings
+from contract_analyst.config import REPO_ROOT, Settings
 from contract_analyst.ingest.inventory import input_paths, path_key
 from contract_analyst.llm.client import LLMClient
 from contract_analyst.llm.factory import get_llm_client
@@ -47,6 +48,15 @@ def _run_dir(out_dir: Path, variant: str) -> Path:
             return path
         except FileExistsError:
             n += 1
+
+
+def _git_commit() -> str | None:
+    """The commit of the code that runs; None without git or outside a checkout: the run never fails for it."""
+    try:
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True,
+                              check=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 class InputError(ValueError):
@@ -94,6 +104,7 @@ def run_analysis(input_dir: Path, settings: Settings, as_of: date, variant: Lite
     ctx = RunContext(settings=settings, client=client, ocr_engine=ocr_engine, trace=trace, input_dir=input_dir,
                      run_dir=run_dir, as_of=as_of, read_cache=read_cache,
                      only_paths=only_paths)
+    commit = _git_commit()  # at the start: a checkout switched during a long run does not relabel it
     started = time.monotonic()
     if variant == "B":
         from contract_analyst.agent.graph_hybrid import build_hybrid_graph
@@ -129,6 +140,7 @@ def run_analysis(input_dir: Path, settings: Settings, as_of: date, variant: Lite
     seconds = round(time.monotonic() - started, 1)
     metrics = {"run_id": run_dir.name, "variant": variant, "as_of": as_of.isoformat(), "seconds": seconds,
                "model": client.model_name, "ocr": f"{ocr_engine.name}/{settings.ocr_preprocess}",
+               "git_commit": commit, "llm_params": client.cache_params() if hasattr(client, "cache_params") else {},
                "prompt_versions": prompt_versions(), "llm_usage": dict(client.usage),
                "cache_hits": getattr(client, "hits", 0), "documents": len(ctx.documents),
                "unprocessed": len(ctx.unprocessed), "removed_claims": ctx.removed_claims, "safety_net": ctx.safety_net,
