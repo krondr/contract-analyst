@@ -101,3 +101,20 @@ def test_server_config_file_overrides_the_defaults(tmp_path, monkeypatch):
     s = load_settings()
     assert s.openai_base_url == "https://llm.example/v1" and s.openai_extra_body == {"reasoning": {"enabled": False}}
     assert s.llm_max_tokens == 4096
+
+
+def test_settings_take_their_defaults_from_the_yaml_alone(tmp_path, monkeypatch):
+    """One source of truth: a value changed only in default.yaml is what Settings() gives, with no code edit."""
+    import yaml
+
+    from contract_analyst import config
+
+    data = yaml.safe_load(config.DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    data["ocr_dpi"] = 123
+    data["field_groups"] = {**data["field_groups"], "core_terms": [*data["field_groups"]["core_terms"], "territory"]}
+    custom = tmp_path / "default.yaml"
+    custom.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    monkeypatch.setattr(config, "DEFAULT_CONFIG", custom)
+    settings = config.Settings()
+    assert settings.ocr_dpi == 123 and settings.field_groups["core_terms"][-1] == "territory"
+    assert config.Settings(ocr_dpi=7).ocr_dpi == 7  # an explicit value still wins
