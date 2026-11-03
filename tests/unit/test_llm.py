@@ -7,9 +7,9 @@ from contract_analyst.config import load_settings
 from contract_analyst.llm.cache import CachingClient
 from contract_analyst.llm.client import AssistantTurn, LLMUnavailable, ReplayMiss, ToolCall
 from contract_analyst.llm.factory import get_llm_client
-from contract_analyst.llm.ollama_client import OllamaClient
+from contract_analyst.llm.ollama_client import GREEDY, THINKING_SAMPLING, OllamaClient
 from contract_analyst.llm.prompts import load_prompt
-from contract_analyst.llm.scripted import ScriptedClient, ScriptExhausted, load_script
+from contract_analyst.llm.scripted import ScriptedClient, ScriptExhausted, Truncated, load_script
 from contract_analyst.llm.structured import StructuredFailure, call_structured
 
 
@@ -257,3 +257,43 @@ def test_answer_truncated_twice_is_a_truncation_failure_not_a_third_try():
     client = ScriptedClient(['{"a": [1, 1', '{"a": [1, 1, 1', '{"a": 1}'])
     result = call_structured(client, M, A)
     assert isinstance(result, StructuredFailure) and result.truncated and len(client.calls) == 2
+
+
+GEN = {"max_tokens": 1000, "think_max_tokens": 1000, "num_ctx": 4096}
+
+
+def _recorded_turn(db, monkeypatch, think, **params):
+    recorder = OllamaClient("qwen3:8b", **params)
+    monkeypatch.setattr(recorder, "_get", lambda think=False: FakeStreamingLLM(_chunks("ok")))
+    CachingClient(recorder, db, "record").chat(M, think=think)
+
+
+@pytest.mark.parametrize("change, think", [({"max_tokens": 2000}, False), ({"think_max_tokens": 2000}, True),
+                                           ({"num_ctx": 8192}, False)], ids=["max_tokens", "think_max_tokens", "num_ctx"])
+def test_turns_recorded_with_other_generation_params_are_not_replayed(change, think, tmp_path, monkeypatch):
+    db = tmp_path / "c.sqlite"
+    _recorded_turn(db, monkeypatch, think, **GEN)
+    # The timeouts, keep_alive and the address never change what the model writes: the turn is replayed.
+    same = OllamaClient("qwen3:8b", "http://127.0.0.1:11434", **GEN, timeout=5, keep_alive="1m", deadline=5)
+    assert CachingClient(same, db, "replay").chat(M, think=think).content == "ok"
+    with pytest.raises(ReplayMiss):
+        CachingClient(OllamaClient("qwen3:8b", **(GEN | change)), db, "replay").chat(M, think=think)
+
+
+@pytest.mark.parametrize("sampling, think", [(GREEDY, False), (THINKING_SAMPLING, True)], ids=["greedy", "thinking"])
+def test_turns_recorded_with_other_sampling_are_not_replayed(sampling, think, tmp_path, monkeypatch):
+    db = tmp_path / "c.sqlite"
+    _recorded_turn(db, monkeypatch, think)
+    monkeypatch.setitem(sampling, "temperature", 0.3)
+    with pytest.raises(ReplayMiss):
+        CachingClient(OllamaClient("qwen3:8b"), db, "replay").chat(M, think=think)
+
+
+@pytest.mark.parametrize("ask", [lambda c: c.structured(M, A), lambda c: c.chat(M).content,
+                                 lambda c: c.chat(M, think=True).content], ids=["structured", "chat", "chat+think"])
+def test_answer_cut_at_the_token_cap_is_not_cached(ask, tmp_path):
+    inner = ScriptedClient([Truncated('{"a": 1'), '{"a": 1}'])
+    cached = CachingClient(inner, tmp_path / "c.sqlite", "record")
+    assert ask(cached) == '{"a": 1'
+    assert ask(cached) == '{"a": 1}'  # asked again: the cut answer was not kept
+    assert ask(cached) == '{"a": 1}' and cached.hits == 1  # the whole one was

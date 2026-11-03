@@ -83,6 +83,12 @@ class OllamaClient:
         cap = self.think_max_tokens if think else self.max_tokens
         return {"num_ctx": self.num_ctx, "num_predict": cap, **(THINKING_SAMPLING if think else GREEDY)}
 
+    def cache_params(self) -> dict:
+        """Everything besides the request that can change an answer; the response cache keys on it. Not the
+        timeouts, keep_alive or the address: they never change what the model writes."""
+        return {"max_tokens": self.max_tokens, "think_max_tokens": self.think_max_tokens, "num_ctx": self.num_ctx,
+                "sampling": GREEDY, "think_sampling": THINKING_SAMPLING}
+
     def check_available(self) -> None:
         try:
             response = httpx.get(f"{self.base_url}/api/tags", timeout=2.0)

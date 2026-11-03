@@ -4,7 +4,9 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from contract_analyst.llm.client import LLMUnavailable
+from contract_analyst.llm.cache import CachingClient
+from contract_analyst.llm.client import LLMUnavailable, ReplayMiss
+from contract_analyst.llm.openai_client import GREEDY, THINKING
 
 M = [{"role": "system", "content": "Ты — агент."}, {"role": "user", "content": "Опись: a1"}]
 
@@ -171,4 +173,41 @@ def test_structured_schema_is_closed_at_every_level_for_openai():
 def test_ok_status_without_an_answer_is_a_transport_error(response):
     with pytest.raises(ConnectionError, match="choices"):
         client(lambda request: response).chat(M)
+
+
+GEN = {"max_tokens": 1000, "think_max_tokens": 1000, "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+       "think_extra_body": {"chat_template_kwargs": {"enable_thinking": True}}}
+
+
+def offline(request):
+    pytest.fail("a replay never asks the server")
+
+
+def _recorded_turn(db, think, **params):
+    CachingClient(client(lambda r: answer({"content": "ok"}), **params), db, "record").chat(M, think=think)
+
+
+@pytest.mark.parametrize("change, think", [({"max_tokens": 2000}, False), ({"think_max_tokens": 2000}, True),
+                                           ({"extra_body": {}}, False), ({"think_extra_body": {}}, True)],
+                         ids=["max_tokens", "think_max_tokens", "extra_body", "think_extra_body"])
+def test_turns_recorded_with_other_generation_params_are_not_replayed(change, think, tmp_path):
+    from contract_analyst.llm.openai_client import OpenAICompatClient
+
+    db = tmp_path / "c.sqlite"
+    _recorded_turn(db, think, **GEN)
+    # The deadline, the address and the key never change what the model writes: the turn is replayed.
+    same = OpenAICompatClient("qwen3-8b", "http://127.0.0.1:8000/v1", api_key="other", deadline=5,
+                              transport=httpx.MockTransport(offline), **GEN)
+    assert CachingClient(same, db, "replay").chat(M, think=think).content == "ok"
+    with pytest.raises(ReplayMiss):
+        CachingClient(client(offline, **(GEN | change)), db, "replay").chat(M, think=think)
+
+
+@pytest.mark.parametrize("sampling, think", [(GREEDY, False), (THINKING, True)], ids=["greedy", "thinking"])
+def test_turns_recorded_with_other_sampling_are_not_replayed(sampling, think, tmp_path, monkeypatch):
+    db = tmp_path / "c.sqlite"
+    _recorded_turn(db, think)
+    monkeypatch.setitem(sampling, "temperature", 0.3)
+    with pytest.raises(ReplayMiss):
+        CachingClient(client(offline), db, "replay").chat(M, think=think)
 

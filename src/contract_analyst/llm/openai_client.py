@@ -75,6 +75,12 @@ class OpenAICompatClient:
         self._http = httpx.Client(base_url=self.base_url, headers=headers, timeout=deadline, transport=transport)
         self.usage = new_usage() | {"truncated": 0}
 
+    def cache_params(self) -> dict:
+        """Everything besides the request that can change an answer; the response cache keys on it. Not the
+        deadline, the address or the key: they never change what the model writes."""
+        return {"max_tokens": self.max_tokens, "think_max_tokens": self.think_max_tokens, "sampling": GREEDY,
+                "think_sampling": THINKING, "extra_body": self.extra_body, "think_extra_body": self.think_extra_body}
+
     def check_available(self) -> None:
         try:
             response = self._http.get("/models", timeout=5.0)
