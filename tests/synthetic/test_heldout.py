@@ -31,7 +31,7 @@ def test_synthetic_replay_builds_the_right_structure(scores):
     assert scores.chain_acc == 1.0 and scores.doc_kind_acc == 1.0, scores
 
 
-@pytest.mark.xfail(strict=True, reason="known gap (docs/experiments/final.md): 2 accepted wrong critical values "
+@pytest.mark.xfail(strict=True, reason="known gap (docs/experiments/final.md): 3 accepted wrong critical values "
                                       "with qwen3:8b; the requirement is zero")
 def test_synthetic_replay_accepts_no_wrong_critical_value(scores):
     assert scores.critical_accepted_wrong == 0, scores
