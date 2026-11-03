@@ -246,8 +246,10 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
     if failed := _first_failure(checks()):
         return RateRow(**base, status=_status(failed), reason=_reason(failed))
     said = _vat_said(row.quote or "", page)
-    # VAT is what the document says for the row; the model's word counts only where the document agrees.
-    base["vat"] = row.vat if row.vat in said else (next(iter(said)) if len(said) == 1 else "unknown")
+    # VAT is what the document says for the row; the model's word counts only where the document agrees. A
+    # percentage carries no VAT: «руб. без НДС» in a neighbouring column belongs to the ruble amounts.
+    base["vat"] = "unknown" if base["unit"] == "%" else (
+        row.vat if row.vat in said else (next(iter(said)) if len(said) == 1 else "unknown"))
     return RateRow(**base, status=ValueStatus.ACCEPTED, reason="quote_reanchored" if places else None)
 
 

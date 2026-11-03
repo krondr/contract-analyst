@@ -577,3 +577,19 @@ def test_an_invalidation_keeps_no_date_because_the_fold_never_dates_one():
                      "недействительным")
     r = gate_op(op, text_doc([text]), load_settings())
     assert (r.status, r.effective_from, r.effective_to) == ("accepted", None, None)
+
+
+# --- wrong values the code can refuse or correct (fix/wrong-values-p4) ---------------------------------------------
+
+_TABLE = text_doc([("Таблица № 2\nНазвание Группы тарифных планов % от суммы оплаченных Клиентом начислений "
+                    "Ставка вознаграждения (руб. без НДС)\nТариф Старт 45% 2000\nТариф Плюс 50% 2400")])
+
+
+def test_a_percentage_has_no_vat_even_under_a_vat_header():
+    s = load_settings()
+    percent = gate_rate(RateOut(label="Тариф Старт, %", amount="45%", vat="excluded", page=1, quote="Тариф Старт 45% 2000"), _TABLE, s)
+    rubles = gate_rate(RateOut(label="Тариф Старт, ставка", amount="2000", vat="excluded", page=1, quote="Тариф Старт 45% 2000"),
+                       _TABLE, s)
+    assert (percent.status, percent.unit, percent.vat) == ("accepted", "%", "unknown")
+    assert (rubles.status, rubles.unit, rubles.vat) == ("accepted", "RUB", "excluded")
+
