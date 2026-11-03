@@ -1,3 +1,4 @@
+import re
 from datetime import date
 from decimal import Decimal
 
@@ -15,12 +16,18 @@ from contract_analyst.eval.golden import (
     GoldenTrap,
     GoldenValue,
 )
-from contract_analyst.eval.metrics import normalize_target, same_value, score_run, similar_text
+from contract_analyst.eval.metrics import (
+    normalize_target,
+    same_value,
+    score_consolidation,
+    score_run,
+    similar_text,
+)
 from contract_analyst.eval.traps import check_traps
 from contract_analyst.kb.store import KnowledgeBase
-from contract_analyst.models import OpType
+from contract_analyst.models import ConsolidatedContract, Extracted, OpType, RateRow, TermState
+from tests.fixtures.builders import acc, text_doc
 from tests.fixtures.builders import make_record as rec
-from tests.fixtures.builders import text_doc
 
 MAIN, SUP = "D990000001-01", "D990000002-01"
 AS_OF = date(2026, 10, 30)
@@ -242,3 +249,158 @@ def test_rate_without_its_own_start_runs_from_its_document(tmp_path):
     s = score_run(make_run(tmp_path / "undated", tweak=undated), golden())
     assert s.critical_accepted_wrong == 0 and s.critical_accepted_correct == baseline.critical_accepted_correct
     assert s.consolidation_acc == baseline.consolidation_acc
+
+
+# --- where consolidation points are lost --------------------------------------------------------------------------
+
+_UNCHANGED = {"doc_kind_acc": 1.0, "chain_acc": 1.0, "critical_total": 8, "clusters_match": True, "traps_passed": 5,
+              "traps_total": 6, "wall_seconds": 0.0, "llm_calls": 0, "input_tokens": 0, "output_tokens": 0,
+              "json_valid_rate": 1.0, "tool_call_valid_rate": 1.0, "safety_net": []}
+
+
+def _mixed(records):
+    """The supplement's first rate lost its end date; its validity glues the old value to the new one."""
+    records["s"].rates[0] = records["s"].rates[0].model_copy(update={"valid_to": None})
+    records["s"].terms["validity"] = acc("до 31.12.2025; до 31.12.2026", "s")
+
+
+def _mixed_golden():
+    gs = golden()
+    gs.chains[0].terms_at = {AS_OF: {"validity": "до 31.12.2026", "payment_terms": "ежемесячно до 10 числа"}}
+    return gs
+
+
+@pytest.mark.parametrize("tweak, gs, changed", [
+    (None, golden, {"critical_accepted_correct": 8, "critical_accepted_wrong": 0, "critical_coverage": 1.0,
+                    "consolidation_acc": 1.0}),
+    (_set("vat", "included", field="rates"), golden, {"critical_accepted_correct": 7, "critical_accepted_wrong": 1,
+                                                      "critical_coverage": 0.875, "consolidation_acc": 0.5}),
+    (_mixed, _mixed_golden, {"critical_accepted_correct": 7, "critical_accepted_wrong": 1, "critical_coverage": 0.875,
+                             "consolidation_acc": 0.25}),
+], ids=["perfect", "wrong_vat", "mixed"])
+def test_existing_scores_are_unchanged(tmp_path, tweak, gs, changed):
+    """Pinned from the code before the miss breakdown existed (d66fc23): explaining the scores must not move them."""
+    s = score_run(make_run(tmp_path, tweak=tweak), gs())
+    assert s.model_dump(include=set(_UNCHANGED) | set(changed)) == _UNCHANGED | changed
+
+
+def _contract(status="active", rates=(), terms=None):
+    """A folded contract as a run stores it; a rate is (amount, vat, valid_from, valid_to)."""
+    return ConsolidatedContract(
+        contract_number=MAIN, as_of=AS_OF, status=status,
+        rates=[RateRow(label="Ставка", amount=Decimal(a), vat=vat, valid_from=vf, valid_to=vt, status="accepted")
+               for a, vat, vf, vt in rates],
+        terms={k: TermState(name=k, current=v if isinstance(v, Extracted) else acc(v)) for k, v in (terms or {}).items()})
+
+
+def _one_chain(status=None, rates=None, terms=None):
+    """A golden set of one chain on AS_OF with only the points given."""
+    golden_rates = [GoldenRate(label="Ставка", amount=Decimal(a), vat=vat, valid_from=vf, valid_to=vt)
+                    for a, vat, vf, vt in rates or ()]
+    chain = GoldenChain(contract_number=MAIN, status_at={AS_OF: status} if status else {},
+                        rates_at={AS_OF: golden_rates} if rates is not None else {},
+                        terms_at={AS_OF: terms} if terms else {})
+    return GoldenSet(as_of_dates=[AS_OF], chains=[chain])
+
+
+def _scored(gs, contract):
+    return score_consolidation(gs, lambda number, when: contract, records={})
+
+
+def test_a_lost_status_point_says_the_status_was_wrong():
+    scored = _scored(_one_chain(status="terminated"), _contract("active"))
+    assert scored.acc == 0.0
+    assert scored.misses == [{"chain": MAIN, "date": "2026-10-30", "point": "status", "reason": "status_wrong",
+                              "expected": "terminated", "got": "active"}]
+    assert _scored(_one_chain(status="terminated"), None).misses[0]["got"] is None  # the run folded no such contract
+    assert _scored(_one_chain(status="active"), _contract("active")).misses == []
+
+
+_H2, _Y27 = (date(2026, 7, 1), date(2026, 12, 31)), (date(2027, 1, 1), None)
+
+
+@pytest.mark.parametrize("golden_rows, got_rows, expected", [
+    ([("675", "excluded", *_H2), ("1200", "excluded", *_Y27)], [("675", "excluded", *_H2)],
+     [("rates_missing", "1200 excluded 2027-01-01–…", None)]),
+    ([("675", "excluded", *_H2)], [("675", "excluded", *_H2), ("300", "excluded", None, None)],
+     [("rates_extra", None, "300 excluded …–…")]),
+    ([("675", "excluded", *_H2)], [("675", "excluded", date(2026, 7, 1), None)],
+     [("rates_period", "675 excluded 2026-07-01–2026-12-31", "675 excluded 2026-07-01–…")]),
+    ([("675", "excluded", *_H2), ("1200", "excluded", *_Y27)],
+     [("675", "excluded", None, None), ("675", "included", *_H2)],
+     [("rates_missing", "1200 excluded 2027-01-01–…", None), ("rates_extra", None, "675 included 2026-07-01–2026-12-31"),
+      ("rates_period", "675 excluded 2026-07-01–2026-12-31", "675 excluded …–…")]),
+], ids=["missing", "extra", "period", "several"])
+def test_a_lost_rate_point_says_which_rows_differ(golden_rows, got_rows, expected):
+    misses = _scored(_one_chain(rates=golden_rows), _contract(rates=got_rows)).misses
+    assert [(m["point"], m["reason"], m["expected"], m["got"]) for m in misses] == [("rates", *e) for e in expected]
+
+
+def test_a_contract_the_run_did_not_fold_misses_its_whole_rate_set():
+    (miss,) = _scored(_one_chain(rates=[("675", "excluded", *_H2)]), None).misses
+    assert (miss["reason"], miss["expected"], miss["got"]) == ("rates_missing", "675 excluded 2026-07-01–2026-12-31", None)
+
+
+def test_rate_rows_show_progress_that_the_all_or_nothing_point_hides():
+    later = date(2027, 2, 1)
+    gs = _one_chain(rates=[("675", "excluded", *_H2), ("1200", "excluded", *_Y27)])
+    gs.as_of_dates.append(later)
+    gs.chains[0].rates_at[later] = [GoldenRate(label="Ставка", amount=Decimal(1200), vat="excluded",
+                                               valid_from=date(2027, 1, 1))]
+    folds = {AS_OF: _contract(rates=[("675", "excluded", *_H2), ("999", "excluded", None, None)]),
+             later: _contract(rates=[("1200", "excluded", *_Y27)])}
+    scored = score_consolidation(gs, lambda number, when: folds[when], records={})
+    assert scored.acc == 0.5  # the first date's rate set is not the golden one
+    assert scored.rows_acc == 2 / 3  # yet two of the three golden rows were folded right
+    assert _scored(_one_chain(status="active"), _contract()).rows_acc == 1.0  # no rate points
+
+
+_COMBINED = "по факсу в течение 3 дней; копии через ЭДО в течение 1 дня"  # a golden value that is itself two clauses
+
+
+@pytest.mark.parametrize("gold, state, reason", [
+    ("до 31.12.2026", None, "term_absent"),
+    ("до 31.12.2026", Extracted(status="rejected", reason="quote_not_found"), "term_absent"),
+    ("до 31.12.2026", Extracted(status="conflict", reason="ops_not_identified"), "term_conflict"),
+    ("до 31.12.2026", "до 31.12.2025; до 31.12.2026", "term_glued"),
+    ("до 31.12.2026", "до 31.12.2025, с продлением до 31.12.2026", "term_glued"),
+    (_COMBINED, _COMBINED + "; оригиналы в течение 5 дней", "term_glued"),
+    ("до 31.12.2026", "до 31.12.2025", "term_different"),
+    ("оплата ежемесячно до 10 числа", "оплата ежеквартально до 10 числа", "term_different"),
+    ("заключен на неопределенный срок", "до 31.12.2026", "term_different"),
+    (_COMBINED, "копии через ЭДО в течение 1 дня", "term_different"),
+], ids=["no_state", "rejected", "conflict", "old_and_new", "extra_date", "golden_combined_plus_more", "other_date",
+        "other_word", "no_golden_numbers", "replaced_instead_of_combined"])
+def test_a_lost_term_point_says_why(gold, state, reason):
+    terms = {} if state is None else {"validity": state}
+    (miss,) = _scored(_one_chain(terms={"validity": gold}), _contract(terms=terms)).misses
+    assert (miss["chain"], miss["point"], miss["reason"]) == (MAIN, "terms.validity", reason)
+
+
+def test_a_term_miss_shows_numbers_and_dates_not_the_wording():
+    gs = _one_chain(terms={"rent": "арендная плата 120 000 рублей в месяц до 31.12.2026",
+                           "plan": "не применяется с 01.03.2026", "validity": "заключен на неопределенный срок"})
+    many = "; ".join(f"ставка {n} 000 рублей с 01.0{n}.2026" for n in range(1, 10))
+    contract = _contract(terms={
+        "rent": "арендная плата 100 000 (сто тысяч) рублей в месяц до 31 декабря 2026 года",
+        "plan": "не менее 40 новых клиентов в месяц; не применяется с 01.03.2026", "validity": many})
+    misses = {m["point"]: m for m in _scored(gs, contract).misses}
+    assert (misses["terms.rent"]["expected"], misses["terms.rent"]["got"]) == ("2026-12-31 120000", "2026-12-31 100000")
+    assert (misses["terms.plan"]["expected"], misses["terms.plan"]["got"]) == ("2026-03-01", "40; 2026-03-01")
+    assert misses["terms.validity"]["expected"] == ""  # nothing but words
+    assert len(misses["terms.validity"]["got"]) == 80 and misses["terms.validity"]["got"].endswith("…")
+    assert not [m for m in misses.values() if re.search("[а-яё]", m["expected"] + m["got"], re.IGNORECASE)]
+
+
+def test_scores_say_where_the_consolidation_points_were_lost(tmp_path):
+    s = score_run(make_run(tmp_path / "mixed", tweak=_mixed), _mixed_golden())
+    assert s.consolidation_misses == {"status_wrong": 0, "rates_missing": 0, "rates_extra": 0, "rates_period": 1,
+                                      "term_absent": 1, "term_conflict": 0, "term_glued": 1, "term_different": 0}
+    assert [(m["date"], m["point"], m["reason"], m["expected"], m["got"]) for m in s.consolidation_miss_list] == [
+        ("2026-10-30", "rates", "rates_period", "675 unknown 2026-07-01–2026-12-31", "675 unknown 2026-07-01–…"),
+        ("2026-10-30", "terms.validity", "term_glued", "2026-12-31", "2025-12-31; 2026-12-31"),
+        ("2026-10-30", "terms.payment_terms", "term_absent", "10", None)]
+    assert s.rates_rows_acc == 0.0
+    perfect = score_run(make_run(tmp_path / "perfect"), golden())
+    assert perfect.rates_rows_acc == 1.0 and perfect.consolidation_miss_list == []
+    assert set(perfect.consolidation_misses.values()) == {0}
