@@ -281,6 +281,27 @@ def test_terminating_a_supplement_cancels_it_not_the_contract():
     assert [e.invalidated for e in c.timeline if e.doc_id == "s2"] == [True]
 
 
+def test_terminating_a_supplement_named_with_its_contract_cancels_the_supplement():
+    """«Расторгнуть ДС № …-02 к Договору № …-01»: the first number says what ends, the second is context."""
+    c = run([main(terms={"payment_terms": ("оплата в течение 10 дней", "5.1")}),
+             rec("s2", "D990000002-01", parent=MAIN, effective=date(2025, 1, 1),
+                 terms={"payment_terms": "оплата в течение 20 дней"}, ops=[(OpType.REPLACE_CLAUSE, "5.1", None)]),
+             rec("s3", "D990000003-01", parent=MAIN, effective=date(2026, 5, 1),
+                 ops=[(OpType.TERMINATE, f"Дополнительное соглашение № D990000002-01 к Договору № {MAIN}",
+                       date(2026, 5, 1))])])
+    assert c.status == "active"
+    assert c.terms["payment_terms"].current.value == "оплата в течение 10 дней"
+    assert [e.invalidated for e in c.timeline if e.doc_id == "s2"] == [True]
+
+
+def test_terminating_the_contract_with_its_supplements_still_ends_it():
+    c = run([main(), rec("s2", "D990000002-01", parent=MAIN, effective=date(2025, 1, 1)),
+             rec("s3", "D990000003-01", parent=MAIN, effective=date(2026, 5, 1),
+                 ops=[(OpType.TERMINATE, f"Договор № {MAIN} и Дополнительное соглашение № D990000002-01",
+                       date(2026, 5, 1))])])
+    assert (c.status, c.status_since) == ("terminated", date(2026, 5, 1))
+
+
 @pytest.mark.parametrize("op", [OpType.TERMINATE, OpType.SUSPEND_PART])
 def test_ending_a_document_outside_the_chain_leaves_the_status(op):
     c = run([main(), rec("s", "D990000002-01", parent=MAIN, effective=date(2026, 5, 1),

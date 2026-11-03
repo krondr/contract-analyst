@@ -87,6 +87,12 @@ def _other_document(target: str | None, contract_number: str) -> bool:
     return bool(numbers) and contract_number not in numbers
 
 
+def _ends_other(target: str | None, contract_number: str) -> bool:
+    """A termination or suspension names what ends first: «ДС № …-03 к Договору № …-01» ends the supplement."""
+    numbers = find_doc_numbers(target or "")
+    return bool(numbers) and numbers[0] != contract_number
+
+
 def _ops_reliable(rec: DocumentRecord) -> bool:
     """The supplement's operations were read: the ops group answered and the gate kept every operation found."""
     failed = any(i.code in LLM_FAILURES and "группа ops" in i.message for i in rec.issues)
@@ -313,7 +319,7 @@ def consolidate(chain: ContractChain, records: dict[str, DocumentRecord], as_of:
                 state.add_rate(row, eff, as_of)
         for op in accepted_ops:  # ending another document does not end the contract
             when = op.effective_from or eff
-            if op.op not in (OpType.TERMINATE, OpType.SUSPEND_PART) or _other_document(op.target, chain.contract_number):
+            if op.op not in (OpType.TERMINATE, OpType.SUSPEND_PART) or _ends_other(op.target, chain.contract_number):
                 continue
             if when is None and refused:  # when it takes effect is unknown, so is whether it already has
                 if status != "terminated":
