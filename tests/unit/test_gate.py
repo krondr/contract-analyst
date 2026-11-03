@@ -628,3 +628,13 @@ def test_a_date_right_after_a_masked_representative_is_refused_from_the_page_tex
     got = apply_gate(Candidate(field="doc_date", value="2023-06-02", kind="date", page=1,
                                quote="02.06.2023г., с одной стороны, и"), page, load_settings())
     assert (got.status, got.reason.split(":")[0]) == ("rejected", "date_role")
+
+
+def test_a_rate_whose_percent_sign_stands_only_in_the_column_header_is_a_percentage():
+    """«% от суммы оплаченных Клиентом начислений» heads the column; the row reads «Тариф Старт / 45 / 2000» and the model's label
+    says it is a percentage."""
+    table = text_doc([("Таблица № 2\nНазвание Группы тарифных планов\n% от суммы оплаченных Клиентом начислений\n"
+                       "Ставка вознаграждения (руб. без НДС)\nТариф Старт\n45\n2000")])
+    row = gate_rate(RateOut(label="Тариф Старт — процент от суммы оплаченных Клиентом начислений", amount="45",
+                            vat="excluded", page=1, quote="Тариф Старт\n45\n2000"), table, load_settings())
+    assert (row.status, row.unit, row.vat) == ("accepted", "%", "unknown")
