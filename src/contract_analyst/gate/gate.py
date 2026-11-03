@@ -123,7 +123,8 @@ def apply_gate(c: Candidate, doc: DocumentText, settings: Settings) -> Extracted
         found, spans = locate_quote(c.quote, page, settings.ocr_quote_fuzzy_threshold)
         yield found
         yield check_value_in_quote(c.value, c.quote, c.kind)
-        yield check_date_role(c.field, c.value, c.quote)
+        before = normalize_text(page.text)[max(0, spans[0][0] - 200):spans[0][0]] if spans else ""
+        yield check_date_role(c.field, c.value, c.quote, before)
         yield check_parent_role(c.field, c.value, c.quote)
         yield check_format(c.value, c.kind)
         yield check_ocr_confidence(c.quote, page, threshold)

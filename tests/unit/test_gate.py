@@ -601,3 +601,30 @@ def test_a_zero_amount_is_refused_not_corrected():
     row = gate_rate(RateOut(label="Услуги Агента", amount="0", page=1,
                             quote="в размере б0%% от оплаченных Клиентом начислений"), scan, load_settings())
     assert row.status != "accepted" and row.reason.split(":")[0] == "zero_amount"
+
+
+@pytest.mark.parametrize("quote", ["в лице ______, действующего на основании доверенности № ___ от 15.01.2021",
+                                   "в лице Иванова И. И., действующего на основании приказа № 12 от 15.01.2021"])
+def test_the_date_of_a_representatives_authority_is_not_the_document_date(quote):
+    from contract_analyst.gate.checks import check_date_role
+
+    got = check_date_role("doc_date", "2021-01-15", quote)
+    assert (got.ok, got.code) == (False, "date_role")
+
+
+@pytest.mark.parametrize("quote", ["г. Москва 15.01.2021", "Дополнительное соглашение № D990000002-01 от 15.01.2021"])
+def test_a_document_date_is_still_accepted(quote):
+    from contract_analyst.gate.checks import check_date_role
+
+    assert check_date_role("doc_date", "2021-01-15", quote).ok
+
+
+def test_a_date_right_after_a_masked_representative_is_refused_from_the_page_text():
+    """The words «действующего на основании доверенности № … от» are masked together with the name, and the model's
+    quote starts at the date: the preamble before the quote shows whose date it is."""
+    page = text_doc([("Дополнительное соглашение № D990000002-01 к Договору № D990000001-01 от 19.08.2020 г.\n"
+                      "АО «Альфа-Связь», в лице ведущего специалиста отдела продаж - - - - 02.06.2023г., "
+                      "с одной стороны, и ООО «Ромашка», с другой стороны, заключили настоящее соглашение.")])
+    got = apply_gate(Candidate(field="doc_date", value="2023-06-02", kind="date", page=1,
+                               quote="02.06.2023г., с одной стороны, и"), page, load_settings())
+    assert (got.status, got.reason.split(":")[0]) == ("rejected", "date_role")

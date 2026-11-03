@@ -434,6 +434,11 @@ _START_BEFORE = re.compile(r"(?:\bс|\bсо|вступ\w*\s+в\s+силу(?:\s+�
 _START_CONTEXT = re.compile(r"вступ\w*\s+в\s+силу|распространя\w*|применя\w*\s+с\b|действ\w*\s+с\b")
 _END_BEFORE = re.compile(r"(?:\bдо|\bпо|окончани\w*|истечени\w*|срок\w*\s+действи\w*)\s*[:—-]?\s*$")
 DATE_ROLES = {"doc_date", "effective_from", "effective_to"}
+# The representative's authority: «действующего на основании доверенности № ___ от …», «приказа … от»; and when the
+# name and the authority are masked together, «в лице <должность> - - - - <дата>». Either date is not the document's.
+_AUTHORITY_BEFORE = re.compile(r"(?:действующ\w*\s+на\s+основании|доверенност\w*|приказ\w*|протокол\w*|решени\w*)"
+                               r"[^.;]{0,70}?\bот\s*$|\bв\s+лице\b[^.;]{0,150}?(?:[-_–—]\s*){3,}$")
+_BEFORE_CHARS = 160
 # «Дополнительное соглашение действует с», «условия, изложенные в Соглашении» name the document, not an operation.
 _OPERATION_VERB = re.compile(r"расторг\w*|прекра[тщ]\w*|приостан\w*|излож(?!енн)\w*|исключ\w*|дополн(?!ительн)\w*|отмен\w*")
 _IN_FORCE_CUE = re.compile(r"вступ\w*\s+в\s+силу|распространя\w*")
@@ -456,19 +461,29 @@ def check_parent_role(field: str, value: str | None, quote: str | None) -> Check
     return _fail("parent_role", "номер в цитате — упоминание другого договора, а не договор, к которому относится документ")
 
 
-def check_date_role(field: str, value: str | None, quote: str | None) -> CheckResult:
+def _flat(text: str) -> str:
+    return " ".join(_ROLE_CUT.sub(" ", text).casefold().split()) + " "
+
+
+def check_date_role(field: str, value: str | None, quote: str | None, before: str = "") -> CheckResult:
     """A date found in the quote must be there in the field's role: a signing date is not the date of the contract a
-    supplement refers to, an entry into force is a start (not an end, not a reference), an end date is an end."""
+    supplement refers to, nor of a representative's authority; an entry into force is a start (not an end, not a
+    reference), an end date is an end. before: the page text just before the quote, for a quote that starts at the
+    date (the authority is checked there too)."""
     target = _as_date(value or "")
     if field not in DATE_ROLES or target is None or not quote:
         return _ok("date_role_unchecked")
-    windows = [" ".join(_ROLE_CUT.sub(" ", quote[max(0, start - 90):start]).casefold().split()) + " "
-               for d, start, _ in date_spans(quote) if d == target]
+    starts = [start for d, start, _ in date_spans(quote) if d == target]
+    windows = [_flat(quote[max(0, start - 90):start]) for start in starts]
     if not windows:
         return _ok("date_role_unchecked")  # value_in_quote decides whether the date is there at all
     if field == "doc_date":
-        fits = [w for w in windows if not (_REFERENCE_BEFORE.search(w) or _START_BEFORE.search(w) or _END_BEFORE.search(w))]
-        reason = "дата в цитате — не дата подписания этого документа (ссылка на другой договор или срок действия)"
+        authority = [_flat((before + " " + quote[:start])[-_BEFORE_CHARS:]) for start in starts]
+        fits = [w for w, a in zip(windows, authority, strict=True)
+                if not (_REFERENCE_BEFORE.search(w) or _START_BEFORE.search(w) or _END_BEFORE.search(w)
+                        or _AUTHORITY_BEFORE.search(a))]
+        reason = ("дата в цитате — не дата подписания этого документа (ссылка на другой договор, срок действия "
+                  "или полномочия представителя)")
     elif field == "effective_from":
         folded = " ".join(quote.casefold().split())
         # «расторгают Договор с 01.09.2026» dates the termination, not the supplement's own entry into force.
