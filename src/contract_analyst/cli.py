@@ -176,13 +176,21 @@ def experiment(name: str, data: Path = Path("data/raw"), golden: Path = Path("da
 
 
 @app.command()
-def chat(kb: Path, thread: str = "default", model: str | None = None) -> None:
+def chat(kb: Path,
+         thread: Annotated[str | None, typer.Option(help="Продолжить диалог с этим id; без опции — новый диалог")] = None,
+         model: str | None = None) -> None:
     """Вопросы по базе знаний прогона, с памятью диалога (пустая строка — выход)."""
+    import secrets
+    from datetime import datetime
+
     from contract_analyst.chat.graph import ChatSession
     from contract_analyst.kb.store import KnowledgeBase
 
     settings = load_settings(**({"llm_model": model} if model else {}))
     session = ChatSession(KnowledgeBase(kb), _llm_client(settings), settings, kb / "chat.sqlite")
+    if thread is None:
+        thread = f"{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(2)}"
+        typer.echo(f"Новый диалог {thread}. Продолжить его позже: --thread {thread}")
     while question := typer.prompt("Вопрос", default="", show_default=False).strip():
         typer.echo(session.ask(question, thread))
 
