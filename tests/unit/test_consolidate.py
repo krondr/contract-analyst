@@ -287,3 +287,29 @@ def test_ending_a_document_outside_the_chain_leaves_the_status(op):
                          ops=[(op, "Договор № D980000007-01", date(2026, 5, 1))])])
     assert c.status == "active"
 
+
+def shorter_term(**kw):
+    """A supplement whose payment term differs from the contract's «130 дней …» yet is a substring of it."""
+    return rec("s", "D990000002-01", parent=MAIN, effective=date(2024, 1, 1),
+               terms={"payment_terms": "30 дней с даты поставки"}, **kw)
+
+
+def test_combined_value_keeps_a_new_value_found_inside_the_current_one():
+    c = run([main(terms={"payment_terms": "130 дней с даты поставки"}), shorter_term()])
+    assert c.terms["payment_terms"].current.value == "130 дней с даты поставки; 30 дней с даты поставки"
+
+
+def test_value_found_inside_the_current_one_is_a_conflict_when_ops_are_unread():
+    s = shorter_term()
+    s.issues.append(Issue(code="llm_invalid_json", message="s.pdf: группа ops — ответ не разобран"))
+    current = run([main(terms={"payment_terms": "130 дней с даты поставки"}), s]).terms["payment_terms"].current
+    assert current.status == "conflict" and current.reason.startswith("ops_not_identified")
+
+
+@pytest.mark.parametrize("repeat", ["Оплата  в течение 30 дней.", "аванс 30%", "оплата в течение 30 дней; аванс 30%"])
+def test_repeated_value_is_not_added_again(repeat):
+    c = run([main(terms={"payment_terms": "оплата в течение 30 дней"}),
+             rec("s1", "D990000002-01", parent=MAIN, effective=date(2024, 1, 1), terms={"payment_terms": "аванс 30%"}),
+             rec("s2", "D990000003-01", parent=MAIN, effective=date(2025, 1, 1), terms={"payment_terms": repeat})])
+    assert c.terms["payment_terms"].current.value == "оплата в течение 30 дней; аванс 30%"
+
