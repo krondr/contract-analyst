@@ -32,8 +32,17 @@ dependencies = [
 contract-analyst = "contract_analyst.cli:app"
 
 [build-system]
-requires = ["uv_build>=0.9.4,<0.10.0"]
-build-backend = "uv_build"
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/contract_analyst"]
+
+# config/ and prompts/ stay at the repo root (the docs point there); the wheel carries copies inside the package,
+# where contract_analyst.config.resource_path() finds them when there is no repo around the installed module.
+[tool.hatch.build.targets.wheel.force-include]
+"config" = "contract_analyst/_resources/config"
+"prompts" = "contract_analyst/_resources/prompts"
 
 [dependency-groups]
 dev = [

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
@@ -10,7 +11,16 @@ import yaml
 from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG = REPO_ROOT / "config" / "default.yaml"
+
+
+def resource_path(relative: str) -> Path:
+    """A file or folder of the repo, such as config/default.yaml or prompts. An installed wheel has no repo around
+    the module and carries copies inside the package instead (force-include in pyproject.toml)."""
+    in_repo = REPO_ROOT / relative
+    return in_repo if in_repo.exists() else Path(files("contract_analyst"), "_resources", relative)
+
+
+DEFAULT_CONFIG = resource_path("config/default.yaml")
 
 
 def disable_remote_tracing() -> None:
