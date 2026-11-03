@@ -8,6 +8,21 @@ def test_defaults_and_overrides():
     assert load_settings(llm_model="ollama:qwen3:14b").llm_model == "ollama:qwen3:14b"
 
 
+def test_code_defaults_equal_the_yaml_for_every_key(monkeypatch):
+    import os
+
+    import yaml
+
+    from contract_analyst.config import DEFAULT_CONFIG, Settings
+
+    for name in [n for n in os.environ if n.startswith("CA_")]:
+        monkeypatch.delenv(name)
+    keys = yaml.safe_load(DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    assert set(keys) <= set(Settings.model_fields)
+    defaults, from_yaml = Settings(), load_settings()
+    assert {k: getattr(defaults, k) for k in keys} == {k: getattr(from_yaml, k) for k in keys}
+
+
 def test_every_llm_call_is_bounded_by_default():
     s = load_settings()
     # A capped answer plus a full clause batch still fits the context window, so the cap ends a runaway answer
