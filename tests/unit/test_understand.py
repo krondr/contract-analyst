@@ -291,3 +291,22 @@ def test_money_clauses_are_packed_into_their_own_smaller_batches():
                     for i in range(1, 21)])
     assert all(estimate_tokens(b) <= 1000 for b in select_clauses(doc, "money", s))
     assert max(estimate_tokens(b) for b in select_clauses(doc, "core_terms", s)) > 1000
+
+
+@pytest.mark.parametrize("op, target, parent, expected", [
+    ("replace_clause", "п. 5.1 Договора № D990000001-01", _TO_CONTRACT, "п. 5.1 Договора"),
+    ("replace_appendix", "Приложение № 2 к Договору № D990000001-01", _TO_CONTRACT, "Приложение № 2 к Договору"),
+    ("terminate", "Договор № D990000001-01", _TO_CONTRACT, "Договор"),
+    ("replace_clause", "Договор № D990000001-01", _TO_CONTRACT, "Договор № D990000001-01"),
+    ("replace_clause", "п. 2 Соглашения № D990000005-01", _TO_CONTRACT, "п. 2 Соглашения № D990000005-01"),
+    ("replace_clause", "п. 2 Соглашения № D990000005-01", _TO_AGREEMENT, "п. 2 Соглашения № D990000005-01"),
+    ("invalidate_document", "D990000001-01", _TO_CONTRACT, "D990000001-01"),
+], ids=["clause_of_the_contract", "appendix_of_the_contract", "termination_of_the_contract", "nothing_else_left",
+        "another_agreement", "parent_is_the_agreement", "invalidation"])
+def test_the_number_of_the_contract_a_supplement_amends_is_dropped_from_its_targets(op, target, parent, expected):
+    """A supplement changes its contract unless it names another document: «п. 5.1 Договора № <its contract>» is
+    «п. 5.1 Договора». The number stays where it names another document, where nothing else would be left of a
+    clause operation's target, and in an invalidation, whose target is the number."""
+    from contract_analyst.understand.understand import drop_own_contract_number
+
+    assert drop_own_contract_number(op, target, parent) == expected
