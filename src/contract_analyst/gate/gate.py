@@ -217,7 +217,20 @@ def _vat_said(quote: str, page: Page) -> set[str]:
 
 
 _PENALTY = re.compile(r"штраф|пен[яиь]|неустойк", re.IGNORECASE)
+# «… рублей за каждый случай нарушения» is a penalty though it does not say so.
+_FOR_A_BREACH = re.compile(r"\bза\s+(?:каждый\s+(?:факт\s+|случай\s+)?|каждое\s+)?нарушени", re.IGNORECASE)
 _PRICE = re.compile(r"вознагражд|ставк|цен[аы]|стоимост|плат[аы]|тариф|оплат", re.IGNORECASE)
+# The base a penalty is counted from («0,5% от суммы вознаграждения») names a price without being one.
+_PRICE_AS_BASE = re.compile(rf"\bот\s+(?:(?:общей\s+)?(?:суммы|размера)\s+)?(?:{_PRICE.pattern})\w*", re.IGNORECASE)
+
+
+def _is_penalty(label: str, quote: str) -> bool:
+    """A penalty or a sum due for a breach: named so by its label, or by its quote where no price is named other than
+    the base it is counted from."""
+    if _PENALTY.search(label):
+        return True
+    return bool((_PENALTY.search(quote) or _FOR_A_BREACH.search(quote))
+                and not _PRICE.search(_PRICE_AS_BASE.sub(" ", quote)))
 _PERCENT_LABEL = re.compile(r"%|\bпроцент", re.IGNORECASE)
 # A sales target is the share of a plan to reach, not a price: «План подключений 95%» under the column «Целевое значение
 # выполнения планового показателя». A reward paid «при выполнении плановых показателей» names its price.
@@ -289,7 +302,7 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
         yield check_not_redacted(row.quote, row.amount)
         if amount == 0:  # «60%» read as «б0%»: the letter is not turned back into a digit, that would be a guess
             yield CheckResult(ok=False, code="zero_amount", reason="сумма 0 — скорее всего, ошибка распознавания")
-        if _PENALTY.search(row.label or "") or (_PENALTY.search(row.quote or "") and not _PRICE.search(row.quote or "")):
+        if _is_penalty(row.label or "", row.quote or ""):
             yield CheckResult(ok=False, code="not_a_rate", reason="штраф или неустойка — это условие о штрафах, не ставка")
         if not _REWARD.search(f"{row.label or ''} {row.quote or ''}") and (
                 _PLAN_NAME.search(row.label or "") or _PLAN_NAME.search(row.quote or "")

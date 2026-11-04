@@ -725,3 +725,17 @@ def test_vat_of_one_table_does_not_pass_to_the_next():
     text = ("Таблица №1\nСтавка, руб. с НДС\nТариф Старт 300\nТаблица №2\nДоплата за подключение\nТариф Старт 150")
     assert _row(text, "Тариф Старт", "300", "Тариф Старт 300").vat == "included"
     assert _row(text, "Доплата за подключение, Тариф Старт", "150", "Тариф Старт 150").vat == "unknown"
+
+
+@pytest.mark.parametrize(("amount", "quote"), [
+    ("0,5", "Исполнитель уплачивает штраф в размере 0,5% от суммы вознаграждения за отчётный месяц"),
+    ("3000", "но не менее 3 000 (трёх тысяч) рублей за каждый случай нарушения"),
+    ("2000", "Агент возмещает 2 000 рублей за каждое нарушение порядка оформления договоров")])
+def test_a_penalty_counted_from_the_reward_is_not_a_rate(amount, quote):
+    row = _row(quote + ".", "Вознаграждение Агента", amount, quote)
+    assert (row.status, row.reason.split(":")[0]) == ("rejected", "not_a_rate")
+
+
+def test_a_reward_that_mentions_a_penalty_elsewhere_is_still_a_rate():
+    quote = "Вознаграждение составляет 300 рублей за каждого Абонента, штраф начисляется отдельно"
+    assert _row(quote + ".", "Вознаграждение", "300", quote).status == "accepted"
