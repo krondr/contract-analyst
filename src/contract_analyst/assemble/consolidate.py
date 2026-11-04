@@ -123,10 +123,12 @@ def _end(rec: DocumentRecord) -> date | None:
 
 
 def document_start(rec: DocumentRecord) -> date | None:
-    """When a document's changes start: its entry into force, or its signing date if it states no other start.
+    """When a document's changes start: its entry into force, or its signing date where it says it starts then.
     A stated start the gate refused leaves it unknown: the signing date would be a guess (spec §6.5)."""
     if rec.effective_from.status == ValueStatus.ABSENT:
-        return _accepted(rec.doc_date)
+        # The signing date only where the text says the document starts at its signing (spec §6.5: a refusal, not a
+        # guess); a record read before this rule has no reason and keeps the old reading.
+        return None if rec.effective_from.reason == "start_not_stated" else _accepted(rec.doc_date)
     return _accepted(rec.effective_from)
 
 

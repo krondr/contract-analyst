@@ -47,7 +47,10 @@ def prompt_versions() -> dict[str, int]:
 
 
 # «Вступает в силу с даты (момента) его подписания»: the start is the signing date, and the text names no date.
-_FROM_SIGNING = re.compile(r"\b(?:с|со)\s+(?:даты|дня|момента)\s+(?:его\s+|её\s+|ее\s+|их\s+)?подписани", re.IGNORECASE)
+_FROM_SIGNING = re.compile(r"\b(?:с|со)\s+(?:даты|дня|момента)\s+(?:его\s+|её\s+|ее\s+|их\s+)?(?:подписани|заключени)"
+                           r"|\bпосле\s+(?:его\s+|её\s+|ее\s+|их\s+)?подписани", re.IGNORECASE)
+# The sentence that says when the document starts: «… вступает в силу / действует / применяется со дня подписания».
+_TERM_VERB = re.compile(r"вступа\w*\s+в\s+силу|действу\w*|распространя\w*|применя\w*", re.IGNORECASE)
 _DOCUMENT_TERM = ("effective_from", "effective_to")
 
 
@@ -305,6 +308,24 @@ def _is_supplement(acc: _Acc, header: HeaderGuess) -> bool:
             or (parent is not None and parent.status == ValueStatus.ACCEPTED))
 
 
+def _says_from_signing(doc: DocumentText) -> bool:
+    """The text says the document starts at its signing («вступает в силу со дня его подписания»); «оплата в течение
+    5 дней с даты подписания Акта» does not."""
+    text = normalize_text("\n".join(p.text for p in doc.pages))
+    return any(_FROM_SIGNING.search(s) and _TERM_VERB.search(s) for s in re.split(r"(?<=[.;])\s+|\n", text))
+
+
+def _wait_for_a_start(acc: _Acc) -> None:
+    """A document that does not say when it starts: its rates and operations without a start of their own are shown
+    but not accepted — the signing date would be a guess. An invalidation is never dated."""
+    reason = "start_unknown: документ не говорит, с какой даты действует, а дата подписания была бы догадкой"
+    acc.rates = [r.model_copy(update={"status": ValueStatus.CONFLICT, "reason": reason})
+                 if r.status == ValueStatus.ACCEPTED and r.valid_from is None else r for r in acc.rates]
+    acc.ops = [o.model_copy(update={"status": ValueStatus.CONFLICT, "reason": reason})
+               if o.status == ValueStatus.ACCEPTED and o.effective_from is None and o.op != OpType.INVALIDATE_DOCUMENT
+               else o for o in acc.ops]
+
+
 def understand_document(doc: DocumentText, header: HeaderGuess, client: LLMClient, settings: Settings,
                         groups: list[str] | None = None) -> DocumentRecord:
     wanted = [g for g in settings.field_groups if groups is None or g in groups]
@@ -318,6 +339,14 @@ def understand_document(doc: DocumentText, header: HeaderGuess, client: LLMClien
     values = {f: _merge(regex.get(f), acc.header_values.get(f)) for f in _HEADER_KINDS}
     if values["effective_from"].status != ValueStatus.ACCEPTED and acc.ops_effective:
         values["effective_from"] = acc.ops_effective
+    start = values["effective_from"]
+    if "header" in wanted and start.status == ValueStatus.ABSENT and start.reason != "from_signing":
+        # The signing date is the start only where the text says so; otherwise the start is unknown.
+        if _says_from_signing(doc):
+            values["effective_from"] = _absent("from_signing")
+        else:
+            values["effective_from"] = _absent("start_not_stated")
+            _wait_for_a_start(acc)
 
     kind_value = acc.header.kind if acc.header else _REGEX_KIND[header.title_kind]
     if kind_value == DocKind.FRAMEWORK and values["parent_number"].status == ValueStatus.ACCEPTED:

@@ -328,3 +328,47 @@ def test_a_refused_start_stays_refused_when_the_term_call_finds_nothing_better()
     rec = _understand(text_doc([TERM_LATE]), [_header_json(kind="main", effective_from=signing), _dates_json()],
                       groups=["header"])
     assert rec.effective_from.status == "rejected"
+
+
+# --- the start of a document that does not state one (fix/wrong-values-p8) -----------------------------------------
+
+_NO_START = ("Дополнительное соглашение № D990000002-01\nк Договору № D990000001-01 от 21.01.2021\nг. Тверь 01.02.2021\n"
+             "1. Стоимость услуги составляет 500 рублей.\n2. Стоимость выезда составляет 900 рублей с 01.03.2021.\n"
+             "3. Оплата производится в течение 5 дней с даты подписания Акта.")
+_RATES = json.dumps({"rates": [
+    {"label": "Стоимость услуги", "amount": "500", "page": 1, "quote": "Стоимость услуги составляет 500 рублей"},
+    {"label": "Стоимость выезда", "amount": "900", "valid_from": "2021-03-01", "page": 1,
+     "quote": "Стоимость выезда составляет 900 рублей с 01.03.2021"}]}, ensure_ascii=False)
+
+
+def test_a_document_that_does_not_say_when_it_starts_has_no_start_and_its_undated_rates_wait():
+    """The signing date is the start only where the text says so: «с даты подписания Акта» is about a payment.
+    A rate without a start of its own is shown but not accepted; a rate with its own start stays."""
+    rec = _understand(text_doc([_NO_START]), [_header_json(kind="supplement"), _RATES], groups=["header", "money"])
+    assert (rec.effective_from.status, rec.effective_from.reason) == ("absent", "start_not_stated")
+    statuses = {r.amount: (r.status, (r.reason or "").split(":")[0]) for r in rec.rates}
+    assert statuses == {Decimal(500): ("conflict", "start_unknown"), Decimal(900): ("accepted", "")}
+
+
+@pytest.mark.parametrize("clause", ["4. Настоящее Соглашение вступает в силу со дня его подписания Сторонами.",
+                                    "4. Соглашение действует с момента заключения.",
+                                    "4. Настоящее Соглашение вступает в силу после его подписания."])
+def test_a_document_that_starts_from_signing_keeps_the_signing_date_as_its_start(clause):
+    rec = _understand(text_doc([f"{_NO_START}\n{clause}"]), [_header_json(kind="supplement"), _dates_json(), _RATES],
+                      groups=["header", "money"])
+    assert (rec.effective_from.status, rec.effective_from.reason) == ("absent", "from_signing")
+    assert all(r.status == "accepted" for r in rec.rates)
+
+
+def test_the_start_is_not_judged_when_the_header_was_not_read():
+    rec = _understand(text_doc([_NO_START]), [_RATES], groups=["money"])
+    assert all(r.status == "accepted" for r in rec.rates)
+
+
+def test_the_fold_dates_a_document_from_its_signing_only_when_the_text_says_so():
+    from contract_analyst.assemble.consolidate import document_start
+
+    rec = _understand(text_doc([_NO_START]), [_header_json(kind="supplement"), _RATES], groups=["header", "money"])
+    signed = rec.model_copy(update={"effective_from": rec.effective_from.model_copy(update={"reason": "from_signing"})})
+    assert rec.doc_date.status == "accepted"
+    assert (document_start(rec), document_start(signed)) == (None, rec.doc_date.value)
