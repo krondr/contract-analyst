@@ -781,3 +781,17 @@ def test_a_clause_that_stops_applying_is_still_an_operation():
 def test_vat_written_out_in_full_is_read_like_its_abbreviation(text, vat):
     assert _row(text, "Цена работ", "15000", "Цена работ — 15 000 рублей").vat == vat
 
+
+@pytest.mark.parametrize("quote", ["Пункт 2.3 Договора в редакции настоящего Соглашения применяется с 01.06.2026",
+                                   "Условия Приложения № 1 в новой редакции применяются с 01.06.2026"])
+def test_the_date_a_changed_clause_applies_from_is_not_the_documents_start(quote):
+    r = apply_gate(Candidate(field="effective_from", value="2026-06-01", kind="date", page=1, quote=quote),
+                   text_doc([f"3. {quote}."]), load_settings())
+    assert (r.status, r.reason.split(":")[0]) == ("rejected", "date_role")
+
+
+def test_a_document_that_applies_from_a_date_still_has_that_start():
+    quote = "Настоящее Соглашение применяется к отношениям Сторон с 01.06.2026"
+    r = apply_gate(Candidate(field="effective_from", value="2026-06-01", kind="date", page=1, quote=quote),
+                   text_doc([f"3. {quote}."]), load_settings())
+    assert r.status == "accepted", r.reason

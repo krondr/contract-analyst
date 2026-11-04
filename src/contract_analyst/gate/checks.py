@@ -466,6 +466,13 @@ def _flat(text: str) -> str:
     return " ".join(_ROLE_CUT.sub(" ", text).casefold().split()) + " "
 
 
+_IN_THE_WORDING_OF = re.compile(r"в\s+(?:новой\s+)?редакции\s+настоящ\w*\s+(?:дополнительн\w*\s+)?соглашени\w*")
+# A numbered clause, section, appendix or table («Пункт 4.1 Договора …», «Приложения № 1») that applies from a date.
+_CLAUSE_APPLIES = re.compile(r"\b(?:пункт\w*|п\.|раздел\w*|приложени\w*|таблиц\w*|спецификаци\w*)\s*(?:№\s*)?\d[\d.]*"
+                             r"[^;]{0,120}?\bпримен")
+_DOCUMENT_ITSELF = re.compile(r"настоящ\w*\s+(?:дополнительн\w*\s+)?(?:соглашени|договор)\w*\s+(?:вступ|действ|примен|распростран)")
+
+
 def check_date_role(field: str, value: str | None, quote: str | None, before: str = "") -> CheckResult:
     """A date found in the quote must be there in the field's role: a signing date is not the date of the contract a
     supplement refers to, nor of a representative's authority; an entry into force is a start (not an end, not a
@@ -490,6 +497,10 @@ def check_date_role(field: str, value: str | None, quote: str | None, before: st
         # «расторгают Договор с 01.09.2026» dates the termination, not the supplement's own entry into force.
         if _OPERATION_VERB.search(folded) and not _IN_FORCE_CUE.search(folded):
             return _fail("date_role", "дата в цитате — дата операции (расторжение, изменение), а не вступления в силу")
+        # «Пункт 4.1 в редакции настоящего Соглашения применяется с …» dates that clause, not the document.
+        own = _IN_THE_WORDING_OF.sub(" ", folded)
+        if _CLAUSE_APPLIES.search(own) and not _DOCUMENT_ITSELF.search(own):
+            return _fail("date_role", "дата в цитате — с какой даты применяется пункт, а не вступление документа в силу")
         fits = [w for w in windows if not (_REFERENCE_BEFORE.search(w) or _END_BEFORE.search(w))
                 and (_START_BEFORE.search(w) or _START_CONTEXT.search(w))]
         reason = "дата в цитате — не начало действия (окончание срока, ссылка или нет слов «вступает в силу», «с»)"
