@@ -9,6 +9,7 @@ openai_extra_body: {}
 openai_think_extra_body: {}
 llm_num_ctx: 16384
 llm_batch_tokens: 6000
+llm_money_batch_tokens: 6000           # rates: a quote per table row; see docs/experiments/p5_p6.md
 # Output caps. Ollama's own default is unlimited with context shifting, so a degenerate answer streams forever.
 # A field group's JSON rarely needs 2000 tokens: 4096 leaves 2x headroom, and a full batch (6000) + prompt (~1500)
 # + 4096 stays inside num_ctx, so even a capped answer never shifts the context.

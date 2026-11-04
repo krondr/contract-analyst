@@ -98,7 +98,8 @@ def _chosen(doc: DocumentText, group: str, supplement: bool) -> list[Clause]:
 
 
 def select_clauses(doc: DocumentText, group: str, settings: Settings, supplement: bool = False) -> list[list[Clause]]:
-    return _pack(_chosen(doc, group, supplement), settings.llm_batch_tokens)
+    budget = settings.llm_money_batch_tokens if group == "money" else settings.llm_batch_tokens
+    return _pack(_chosen(doc, group, supplement), budget)
 
 
 def select_term_clauses(doc: DocumentText, settings: Settings) -> list[list[Clause]]:

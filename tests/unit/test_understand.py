@@ -69,7 +69,7 @@ def test_long_document_batched_not_truncated():
 
 
 def test_oversized_clause_is_split_not_dropped():
-    s = load_settings(llm_batch_tokens=500)
+    s = load_settings(llm_batch_tokens=500, llm_money_batch_tokens=500)
     doc = text_doc(["1. Ставка вознаграждения " + "очень длинный текст " * 300])
     batches = select_clauses(doc, "money", s)
     assert len(batches) > 1 and all(estimate_tokens(b) <= 500 for b in batches)
@@ -282,3 +282,12 @@ def test_the_header_batch_reads_the_clause_where_the_city_and_date_stand():
                      "2. Предмет договора\n2.1. Партнер оказывает услуги.")])
     picked = [c.clause_id for b in select_clauses(doc, "header", load_settings()) for c in b]
     assert "1.6.2" in picked and "2.1" not in picked and "1.6.1" not in picked
+
+
+def test_money_clauses_are_packed_into_their_own_smaller_batches():
+    """A rate table answer carries a quote per row: the money group packs fewer clauses per call, the others do not."""
+    s = load_settings(llm_batch_tokens=6000, llm_money_batch_tokens=1000)
+    doc = text_doc([f"{i}. Ставка {i} составляет {i * 10} рублей, срок оплаты 5 дней. " + "слово " * 400
+                    for i in range(1, 21)])
+    assert all(estimate_tokens(b) <= 1000 for b in select_clauses(doc, "money", s))
+    assert max(estimate_tokens(b) for b in select_clauses(doc, "core_terms", s)) > 1000
