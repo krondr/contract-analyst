@@ -270,3 +270,15 @@ def test_an_operation_on_an_agreement_names_which_one(target, doc, parent, expec
     from contract_analyst.understand.understand import name_amended_agreement
 
     assert name_amended_agreement(target, doc, parent) == expected
+
+
+def test_the_header_batch_reads_the_clause_where_the_city_and_date_stand():
+    """A contract that opens with «1. Определения»: the line «г. Москва «25» января 2021 г.» comes after the
+    definitions, and segmentation files it under the last definition."""
+    doc = text_doc([("ДОГОВОР № D990000001-01\n1. Определения\n1.1. Абонент – лицо, заключившее договор.\n"
+                     "1.2. Тариф – тарифный план.\n1.6. Комплект – SIM-карта.\n1.6.1. Стартовый комплект.\n"
+                     "1.6.2. Набор услуг.\nг. Москва «25» января 2021 г.\nАО «Альфа-Связь», в лице директора, с одной "
+                     "стороны, и ООО «Ромашка», с другой стороны, заключили настоящий Договор.\n"
+                     "2. Предмет договора\n2.1. Партнер оказывает услуги.")])
+    picked = [c.clause_id for b in select_clauses(doc, "header", load_settings()) for c in b]
+    assert "1.6.2" in picked and "2.1" not in picked and "1.6.1" not in picked
