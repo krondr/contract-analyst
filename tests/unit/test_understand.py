@@ -372,3 +372,20 @@ def test_the_fold_dates_a_document_from_its_signing_only_when_the_text_says_so()
     signed = rec.model_copy(update={"effective_from": rec.effective_from.model_copy(update={"reason": "from_signing"})})
     assert rec.doc_date.status == "accepted"
     assert (document_start(rec), document_start(signed)) == (None, rec.doc_date.value)
+
+
+@pytest.mark.parametrize("clause", [
+    "Настоящее Соглашение применяется к отношениям Сторон с 01.03.2021.",
+    "Настоящее Соглашение распространяет свое действие на отношения Сторон, возникшие с 01.03.2021.",
+    "Условия настоящего Дополнительного соглашения вводятся с 01.03.2021."])
+def test_the_term_call_reads_a_clause_that_says_from_when_the_document_applies(clause):
+    text = ("Дополнительное соглашение № D990000002-01\nг. Тверь 21.01.2021\n"
+            + "\n".join(f"{i}. Условие номер {i} без дат." for i in range(1, 6)) + f"\n6. {clause}")
+    assert _term_ids(text_doc([text])) == ["6"]
+
+
+def test_the_term_call_skips_a_clause_that_applies_a_rate_from_a_date():
+    text = ("Дополнительное соглашение № D990000002-01\nг. Тверь 21.01.2021\n"
+            + "\n".join(f"{i}. Условие номер {i} без дат." for i in range(1, 6))
+            + "\n6. Ставка вознаграждения применяется с 01.03.2021.")
+    assert _term_ids(text_doc([text])) == []
