@@ -22,6 +22,11 @@ _SUPPLEMENT_OPS = re.compile(
     r"|утратившим\s+силу|недействительн|отменить|прекращ|прекрат|приостанов|расторг|вступает в силу|распространяет",
     re.IGNORECASE | re.DOTALL)
 _FEW_CLAUSES = 2
+# Where the parties sign in: «г. Москва «25» января 2021 г.» or «… в лице …». A contract that opens with «1. Определения»
+# has it after the definitions, inside a clause the header batch would not read.
+_SIGNING_IN = re.compile(r"\bг\.\s*[А-ЯЁ][а-яё-]+[\s,]*(?:[«\"]?\d{1,2}[»\"]?\s+[а-яё]+\s+\d{4}|\d{1,2}\.\d{2}\.\d{4})"
+                        r"|\bв\s+лице\b")
+_SIGNING_PAGES = 2
 # Where a document states its own start or end, usually near its end: «Настоящее Соглашение вступает в силу с …»,
 # «Договор действует до …», «Срок действия Договора …».
 _OWN_TERM = re.compile(
@@ -80,8 +85,11 @@ def _chosen(doc: DocumentText, group: str, supplement: bool) -> list[Clause]:
     if group == "ops" and supplement:
         return _supplement_ops(doc)
     if group == "header":
-        numbered = [c for c in doc.clauses if c.clause_id != "preamble"][:2]
-        return [c for c in doc.clauses if c.clause_id == "preamble"] + numbered
+        numbered = [c for c in doc.clauses if c.clause_id != "preamble"]
+        first_page = doc.clauses[0].page if doc.clauses else 1
+        signing = next((c for c in numbered[2:] if c.page < first_page + _SIGNING_PAGES and _SIGNING_IN.search(c.text)),
+                       None)
+        return [c for c in doc.clauses if c.clause_id == "preamble"] + numbered[:2] + ([signing] if signing else [])
     pattern = re.compile(KEYWORDS[group], re.IGNORECASE)
     picked = [c for c in doc.clauses if pattern.search(c.text)]
     if group == "ops":
@@ -90,7 +98,8 @@ def _chosen(doc: DocumentText, group: str, supplement: bool) -> list[Clause]:
 
 
 def select_clauses(doc: DocumentText, group: str, settings: Settings, supplement: bool = False) -> list[list[Clause]]:
-    return _pack(_chosen(doc, group, supplement), settings.llm_batch_tokens)
+    budget = settings.llm_money_batch_tokens if group == "money" else settings.llm_batch_tokens
+    return _pack(_chosen(doc, group, supplement), budget)
 
 
 def select_term_clauses(doc: DocumentText, settings: Settings) -> list[list[Clause]]:

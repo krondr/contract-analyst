@@ -577,3 +577,151 @@ def test_an_invalidation_keeps_no_date_because_the_fold_never_dates_one():
                      "недействительным")
     r = gate_op(op, text_doc([text]), load_settings())
     assert (r.status, r.effective_from, r.effective_to) == ("accepted", None, None)
+
+
+# --- wrong values the code can refuse or correct (fix/wrong-values-p4) ---------------------------------------------
+
+_TABLE = text_doc([("Таблица № 2\nНазвание Группы тарифных планов % от суммы оплаченных Клиентом начислений "
+                    "Ставка вознаграждения (руб. без НДС)\nТариф Старт 45% 2000\nТариф Плюс 50% 2400")])
+
+
+def test_a_percentage_has_no_vat_even_under_a_vat_header():
+    s = load_settings()
+    percent = gate_rate(RateOut(label="Тариф Старт, %", amount="45%", vat="excluded", page=1, quote="Тариф Старт 45% 2000"), _TABLE, s)
+    rubles = gate_rate(RateOut(label="Тариф Старт, ставка", amount="2000", vat="excluded", page=1, quote="Тариф Старт 45% 2000"),
+                       _TABLE, s)
+    assert (percent.status, percent.unit, percent.vat) == ("accepted", "%", "unknown")
+    assert (rubles.status, rubles.unit, rubles.vat) == ("accepted", "RUB", "excluded")
+
+
+
+def test_a_zero_amount_is_refused_not_corrected():
+    """«60%» misread as «б0%» on a scan: the code does not turn the letter back into a digit."""
+    scan = text_doc(["- в размере б0%% от оплаченных начислений по пакетному предложению за каждого Клиента"])
+    row = gate_rate(RateOut(label="Услуги Агента", amount="0", page=1,
+                            quote="в размере б0%% от оплаченных Клиентом начислений"), scan, load_settings())
+    assert row.status != "accepted" and row.reason.split(":")[0] == "zero_amount"
+
+
+@pytest.mark.parametrize("quote", ["в лице ______, действующего на основании доверенности № ___ от 15.01.2021",
+                                   "в лице Иванова И. И., действующего на основании приказа № 12 от 15.01.2021"])
+def test_the_date_of_a_representatives_authority_is_not_the_document_date(quote):
+    from contract_analyst.gate.checks import check_date_role
+
+    got = check_date_role("doc_date", "2021-01-15", quote)
+    assert (got.ok, got.code) == (False, "date_role")
+
+
+@pytest.mark.parametrize("quote", ["г. Москва 15.01.2021", "Дополнительное соглашение № D990000002-01 от 15.01.2021"])
+def test_a_document_date_is_still_accepted(quote):
+    from contract_analyst.gate.checks import check_date_role
+
+    assert check_date_role("doc_date", "2021-01-15", quote).ok
+
+
+def test_a_date_right_after_a_masked_representative_is_refused_from_the_page_text():
+    """The words «действующего на основании доверенности № … от» are masked together with the name, and the model's
+    quote starts at the date: the preamble before the quote shows whose date it is."""
+    page = text_doc([("Дополнительное соглашение № D990000002-01 к Договору № D990000001-01 от 19.08.2020 г.\n"
+                      "АО «Альфа-Связь», в лице ведущего специалиста отдела продаж - - - - 02.06.2023г., "
+                      "с одной стороны, и ООО «Ромашка», с другой стороны, заключили настоящее соглашение.")])
+    got = apply_gate(Candidate(field="doc_date", value="2023-06-02", kind="date", page=1,
+                               quote="02.06.2023г., с одной стороны, и"), page, load_settings())
+    assert (got.status, got.reason.split(":")[0]) == ("rejected", "date_role")
+
+
+def test_a_rate_whose_percent_sign_stands_only_in_the_column_header_is_a_percentage():
+    """«% от суммы оплаченных Клиентом начислений» heads the column; the row reads «Тариф Старт / 45 / 2000» and the model's label
+    says it is a percentage."""
+    table = text_doc([("Таблица № 2\nНазвание Группы тарифных планов\n% от суммы оплаченных Клиентом начислений\n"
+                       "Ставка вознаграждения (руб. без НДС)\nТариф Старт\n45\n2000")])
+    row = gate_rate(RateOut(label="Тариф Старт — процент от суммы оплаченных Клиентом начислений", amount="45",
+                            vat="excluded", page=1, quote="Тариф Старт\n45\n2000"), table, load_settings())
+    assert (row.status, row.unit, row.vat) == ("accepted", "%", "unknown")
+
+
+_TARGETS = ("2.2. Компания устанавливает Перечень Плановых показателей к выполнению.\nТаблица № 5\n"
+            "Плановый показатель | Целевое значение выполнения планового показателя\n"
+            "План подключений 95%\nПлан подключений с переносом номера 100%\nТребования к ассортименту 95%\n"
+            "2.3. Компания выплачивает Агенту вознаграждение при выполнении Плановых показателей:\n"
+            "% от оплаченных Клиентом начислений (при выполнении плановых показателей №1): 45\n"
+            "Ставка вознаграждения (руб. без НДС)\nТариф Старт 300\n"
+            "Увеличение значения X за каждый выполненный плановый показатель: 2 п.п.")
+
+
+@pytest.mark.parametrize(("label", "amount", "quote"), [
+    ("План подключений", "95%", "План подключений 95%"),
+    ("План подключений с переносом номера", "100%", "План подключений с переносом номера 100%"),
+    ("Требования к ассортименту", "95%", "Требования к ассортименту 95%")])
+def test_a_sales_target_is_not_a_rate(label, amount, quote):
+    """A target («целевое значение выполнения планового показателя») is the share of the plan to reach, not a price."""
+    row = gate_rate(RateOut(label=label, amount=amount, page=1, quote=quote), text_doc([_TARGETS]), load_settings())
+    assert (row.status, row.reason.split(":")[0]) == ("rejected", "not_a_rate")
+
+
+@pytest.mark.parametrize(("label", "amount", "quote", "unit"), [
+    ("% от оплаченных Клиентом начислений (при выполнении плановых показателей №1)", "45",
+     "% от оплаченных Клиентом начислений (при выполнении плановых показателей №1): 45", "%"),
+    ("Тариф Старт", "300", "Тариф Старт 300", "RUB"),
+    ("Тариф Старт (при выполнении плановых показателей №1)", "300", "Тариф Старт 300", "RUB"),
+    ("Увеличение значения X за каждый выполненный плановый показатель, п.п.", "2",
+     "Увеличение значения X за каждый выполненный плановый показатель: 2 п.п.", "RUB")])
+def test_a_reward_paid_when_targets_are_met_is_still_a_rate(label, amount, quote, unit):
+    row = gate_rate(RateOut(label=label, amount=amount, page=1, quote=quote), text_doc([_TARGETS]), load_settings())
+    assert (row.status, row.unit) == ("accepted", unit), row.reason
+
+
+@pytest.mark.parametrize("op", ["other", "replace_clause"])
+def test_the_entry_into_force_of_a_supplement_is_not_an_operation(op):
+    quote = "Настоящее Соглашение вступает в силу с 01.04.2024"
+    r = gate_op(OpOut(op=op, target="5", page=1, quote=quote), text_doc([f"5. {quote}."]), load_settings())
+    assert (r.status, r.reason.split(":")[0]) == ("rejected", "not_an_operation")
+
+
+def test_an_operation_that_also_states_its_entry_into_force_is_kept():
+    quote = "Пункт 3.1 Договора изложить в следующей редакции, Соглашение вступает в силу с 01.04.2024"
+    r = gate_op(OpOut(op="replace_clause", target="3.1", page=1, quote=quote), text_doc([f"1. {quote}."]),
+                load_settings())
+    assert r.status == "accepted", r.reason
+
+
+@pytest.mark.parametrize(("amount", "quote", "rubles"), [
+    ("10", "вознаграждение составляет 10 (Десять) копеек (без учета НДС)", "0.10"),
+    ("10", "но не менее 10 (Десяти) копеек (без учета НДС)", "0.10"),
+    ("10", "вознаграждение составляет 10 рублей 50 копеек", "10.50"),
+    ("6500", "Стоимость доставки составляет 6 500 (шесть тысяч пятьсот) рублей 00 копеек", "6500"),
+    ("400,00", "вознаграждение в размере 400,00 (четыреста рублей 00 коп.) рублей", "400")])
+def test_an_amount_in_kopecks_is_written_in_rubles(amount, quote, rubles):
+    row = gate_rate(RateOut(label="Вознаграждение", amount=amount, page=1, quote=quote), text_doc([quote + "."]),
+                    load_settings())
+    assert (row.status, row.unit, row.amount) == ("accepted", "RUB", Decimal(rubles)), row.reason
+
+
+def test_the_first_part_of_a_reward_is_how_it_is_paid_not_a_rate():
+    quote = ("в месяце, следующем за месяцем Регистрации, вознаграждение выплачивается в размере 10 (Десяти) копеек "
+             "(Первая часть вознаграждения)")
+    row = gate_rate(RateOut(label="Первая часть вознаграждения", amount="10", page=1, quote=quote),
+                    text_doc([quote + "."]), load_settings())
+    assert (row.status, row.reason.split(":")[0]) == ("rejected", "not_a_rate")
+
+
+def _row(text: str, label: str, amount: str, quote: str):
+    return gate_rate(RateOut(label=label, amount=amount, page=1, quote=quote), text_doc([text]), load_settings())
+
+
+def test_vat_in_a_table_header_far_above_the_row_applies_to_it():
+    filler = "\n".join(f"Тарифный план группы {i}\n{100 + i}" for i in range(60))
+    text = f"1. Изложить Таблицу 1 в следующей редакции:\nТаблица №1\nНазвание\nСтавка, руб. без НДС\n{filler}\nИнтернет\n500"
+    assert text.find("Интернет") - text.find("без НДС") > 1000
+    assert _row(text, "Интернет", "500", "Интернет 500").vat == "excluded"
+
+
+def test_vat_is_found_when_the_cells_of_a_row_stand_on_separate_lines():
+    text = "Таблица №1\nСтавка вознаграждения (руб.\nбез НДС)\nТариф Старт\n270\n500\nТариф Макс\n675\n1200"
+    assert _row(text, "Тариф Макс", "1200", "Тариф Макс 675 1200").vat == "excluded"
+
+
+def test_vat_of_one_table_does_not_pass_to_the_next():
+    text = ("Таблица №1\nСтавка, руб. с НДС\nТариф Старт 300\nТаблица №2\nДоплата за подключение\nТариф Старт 150")
+    assert _row(text, "Тариф Старт", "300", "Тариф Старт 300").vat == "included"
+    assert _row(text, "Доплата за подключение, Тариф Старт", "150", "Тариф Старт 150").vat == "unknown"

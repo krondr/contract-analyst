@@ -3,6 +3,8 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from contract_analyst.config import load_settings
 from contract_analyst.ingest.inventory import list_inputs
 from contract_analyst.ingest.reader import read_document
@@ -67,7 +69,7 @@ def test_long_document_batched_not_truncated():
 
 
 def test_oversized_clause_is_split_not_dropped():
-    s = load_settings(llm_batch_tokens=500)
+    s = load_settings(llm_batch_tokens=500, llm_money_batch_tokens=500)
     doc = text_doc(["1. Ставка вознаграждения " + "очень длинный текст " * 300])
     batches = select_clauses(doc, "money", s)
     assert len(batches) > 1 and all(estimate_tokens(b) <= 500 for b in batches)
@@ -231,3 +233,61 @@ def test_entry_into_force_from_signing_leaves_the_start_to_the_signing_date():
     rec = _understand(doc, [_header_json(kind="supplement", effective_from=filled_in)], groups=["header"])
     assert (rec.effective_from.status, rec.effective_from.reason) == ("absent", "from_signing")
 
+
+
+# --- the agreement an operation changes (fix/wrong-values-p4) -----------------------------------------------------
+
+def _parent(number, quote):
+    from contract_analyst.models import Extracted, ParentRef, Source
+
+    return Extracted(value=ParentRef(number=number), status="accepted", source=Source(doc_id="d", page=1, quote=quote))
+
+
+_DEFINES = text_doc([("Дополнительное соглашение № D990000009-01 к Договору № D990000001-01 от 19.08.2020 г.\n"
+                      "Стороны заключили настоящее дополнительное соглашение (далее - «Соглашение») к договору "
+                      "№ D990000001-01 от 19.08.2020 г. (далее - «Договор») и дополнительному соглашению "
+                      "№ D990000005-01 от 29.08.2020 г. (далее – «Соглашение») о нижеследующем:\n"
+                      "1. Изложить п. 1 – п. 14 Соглашения в следующей редакции.")])
+_PLAIN = text_doc([("Дополнительное соглашение № D990000009-01 к Соглашению № D990000005-01 от 29.08.2020 г.\n"
+                    "1. Изложить п. 1 – п. 14 Соглашения в следующей редакции.")])
+_TO_CONTRACT = _parent("D990000001-01", "к Договору № D990000001-01 от 19.08.2020 г.")
+_TO_AGREEMENT = _parent("D990000005-01", "к Соглашению № D990000005-01 от 29.08.2020 г.")
+
+
+@pytest.mark.parametrize("target, doc, parent, expected", [
+    ("п. 1–14 Соглашения", _PLAIN, _TO_AGREEMENT, "п. 1–14 Соглашения № D990000005-01"),
+    ("п. 1–14 Соглашения", _DEFINES, _TO_CONTRACT, "п. 1–14 Соглашения № D990000005-01"),
+    ("п. 3 настоящего Соглашения", _PLAIN, _TO_AGREEMENT, "п. 3 настоящего Соглашения"),
+    ("п. 5 Договора", _PLAIN, _TO_AGREEMENT, "п. 5 Договора"),
+    ("п. 2 Соглашения № D990000007-01", _PLAIN, _TO_AGREEMENT, "п. 2 Соглашения № D990000007-01"),
+    ("п. 1–14 Соглашения", _PLAIN, _TO_CONTRACT, "п. 1–14 Соглашения"),
+], ids=["parent_is_the_agreement", "agreement_defined_in_the_text", "this_agreement", "the_contract", "numbered",
+        "parent_is_the_contract"])
+def test_an_operation_on_an_agreement_names_which_one(target, doc, parent, expected):
+    """«п. 1–14 Соглашения» with no number would be applied to the contract itself. The number is the one the text
+    defines as «Соглашение», or the parent's when the document calls its parent an agreement; a parent that is the
+    contract does not name the agreement."""
+    from contract_analyst.understand.understand import name_amended_agreement
+
+    assert name_amended_agreement(target, doc, parent) == expected
+
+
+def test_the_header_batch_reads_the_clause_where_the_city_and_date_stand():
+    """A contract that opens with «1. Определения»: the line «г. Москва «25» января 2021 г.» comes after the
+    definitions, and segmentation files it under the last definition."""
+    doc = text_doc([("ДОГОВОР № D990000001-01\n1. Определения\n1.1. Абонент – лицо, заключившее договор.\n"
+                     "1.2. Тариф – тарифный план.\n1.6. Комплект – SIM-карта.\n1.6.1. Стартовый комплект.\n"
+                     "1.6.2. Набор услуг.\nг. Москва «25» января 2021 г.\nАО «Альфа-Связь», в лице директора, с одной "
+                     "стороны, и ООО «Ромашка», с другой стороны, заключили настоящий Договор.\n"
+                     "2. Предмет договора\n2.1. Партнер оказывает услуги.")])
+    picked = [c.clause_id for b in select_clauses(doc, "header", load_settings()) for c in b]
+    assert "1.6.2" in picked and "2.1" not in picked and "1.6.1" not in picked
+
+
+def test_money_clauses_are_packed_into_their_own_smaller_batches():
+    """A rate table answer carries a quote per row: the money group packs fewer clauses per call, the others do not."""
+    s = load_settings(llm_batch_tokens=6000, llm_money_batch_tokens=1000)
+    doc = text_doc([f"{i}. Ставка {i} составляет {i * 10} рублей, срок оплаты 5 дней. " + "слово " * 400
+                    for i in range(1, 21)])
+    assert all(estimate_tokens(b) <= 1000 for b in select_clauses(doc, "money", s))
+    assert max(estimate_tokens(b) for b in select_clauses(doc, "core_terms", s)) > 1000

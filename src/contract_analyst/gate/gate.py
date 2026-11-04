@@ -13,6 +13,8 @@ from rapidfuzz import fuzz
 
 from contract_analyst.config import Settings
 from contract_analyst.gate.checks import (
+    _IN_FORCE_CUE,
+    _OPERATION_VERB,
     CheckResult,
     ValueKind,
     _norm,
@@ -123,7 +125,8 @@ def apply_gate(c: Candidate, doc: DocumentText, settings: Settings) -> Extracted
         found, spans = locate_quote(c.quote, page, settings.ocr_quote_fuzzy_threshold)
         yield found
         yield check_value_in_quote(c.value, c.quote, c.kind)
-        yield check_date_role(c.field, c.value, c.quote)
+        before = normalize_text(page.text)[max(0, spans[0][0] - 200):spans[0][0]] if spans else ""
+        yield check_date_role(c.field, c.value, c.quote, before)
         yield check_parent_role(c.field, c.value, c.quote)
         yield check_format(c.value, c.kind)
         yield check_ocr_confidence(c.quote, page, threshold)
@@ -189,20 +192,73 @@ _VAT_SAID = {
     "included": re.compile(r"(?:с\s+учётом|с\s+учетом|(?<!\bне\s)включая|в\s+т\.\s*ч\.|в\s+том\s+числе)\s+ндс"
                            r"|\bс\s+ндс|ндс\s+включ"),
 }
-_VAT_CONTEXT = 400  # characters above the row: the table header that states VAT for its rows
+# The table a row belongs to starts at its «Таблица №…» or at the clause above it: a header that states VAT for the
+# rows may stand far above a long table, but never passes to the next table.
+_TABLE_START = re.compile(r"таблиц\w*\s*№|^\s*\d{1,2}(?:\.\d{1,2})*\.\s+\S", re.IGNORECASE | re.MULTILINE)
+
+
+def _find_flat(quote: str, text: str) -> int:
+    """Where the quote starts on the page, whatever whitespace stands between its words (table cells are often one
+    per line in the text layer)."""
+    words = quote.split()[:8]
+    if not words:
+        return -1
+    m = re.search(r"\s+".join(map(re.escape, words)), text)
+    return m.start() if m else -1
 
 
 def _vat_said(quote: str, page: Page) -> set[str]:
-    """VAT treatments said in the quote or in the text just above it on the page (a table header)."""
+    """VAT treatments said in the quote or above it in the same table (its header)."""
     text, q = page.text.casefold(), quote.casefold().strip()
-    at = text.find(q[:40]) if q else -1
-    context = q + "\n" + (text[max(0, at - _VAT_CONTEXT):at] if at >= 0 else "")
+    at = _find_flat(q, text)
+    starts = [m.start() for m in _TABLE_START.finditer(text, 0, at)] if at >= 0 else []
+    context = q + "\n" + (text[starts[-1] if starts else 0:at] if at >= 0 else "")
     return {vat for vat, pattern in _VAT_SAID.items() if pattern.search(context)}
 
 
 _PENALTY = re.compile(r"штраф|пен[яиь]|неустойк", re.IGNORECASE)
 _PRICE = re.compile(r"вознагражд|ставк|цен[аы]|стоимост|плат[аы]|тариф|оплат", re.IGNORECASE)
+_PERCENT_LABEL = re.compile(r"%|\bпроцент", re.IGNORECASE)
+# A sales target is the share of a plan to reach, not a price: «План подключений 95%» under the column «Целевое значение
+# выполнения планового показателя». A reward paid «при выполнении плановых показателей» names its price.
+# The row is named by the plan («План подключений», «Плановые показатели по …»); «при выполнении плановых показателей»
+# is a condition of a reward. In the target table every row is a bare «name NN%».
+_PLAN_NAME = re.compile(r"^\W*план", re.IGNORECASE)
+_BARE_PERCENT_ROW = re.compile(r"^\D{3,150}?\s\d{1,3}(?:[.,]\d+)?\s*%$")
+_TARGET_TABLE = re.compile(r"целев\w*\s+значени\w*\s+выполнени", re.IGNORECASE)
+_REWARD = re.compile(rf"{_PRICE.pattern}|оплач|начислени|выплач", re.IGNORECASE)
 _PERCENT_AFTER = r"\s*(?:\([^)]{0,80}\)\s*)?(?:%|процент)"  # «60%», «60 (шестьдесят) процентов»
+
+
+_NUMBER = re.compile(r"(?<![\d,.])\d{1,3}(?:[ \u00a0]\d{3})+(?:[.,]\d+)?|(?<![\d,.])\d+(?:[.,]\d+)?")
+_IN_WORDS = r"\s*(?:\([^)]{0,80}\)\s*)?"  # «10 (Десяти) копеек»
+_KOPECKS = re.compile(rf"^{_IN_WORDS}коп(?:\.|е)", re.IGNORECASE)
+_RUBLES_AND_KOPECKS = re.compile(rf"^{_IN_WORDS}руб\w*\.?\s*(\d{{1,2}}){_IN_WORDS}коп(?:\.|е)", re.IGNORECASE)
+_PAYMENT_PART = re.compile(r"част\w*\s+вознагражд", re.IGNORECASE)
+
+
+def _in_rubles(amount: Decimal, quote: str) -> Decimal | None:
+    """The amount in rubles as the quote writes it: «10 (Десяти) копеек» is 0.10, «10 рублей 50 копеек» is 10.50.
+    None when the quote writes the amount in more than one way."""
+    readings = set()
+    for m in _NUMBER.finditer(quote):
+        if amount not in find_numbers(m.group(0)):
+            continue
+        tail = quote[m.end():m.end() + 160]
+        if both := _RUBLES_AND_KOPECKS.match(tail):
+            readings.add(amount + Decimal(both.group(1)) / 100)
+        elif _KOPECKS.match(tail):
+            readings.add(amount / 100)
+        else:
+            readings.add(amount)
+    return next(iter(readings)) if len(readings) == 1 else (amount if not readings else None)
+
+
+def _clause_text(doc: DocumentText, source: Source | None) -> str:
+    """The whole clause holding a quote, across pages: a table's column header may stand a page above the row."""
+    if source is None or source.clause_id is None:
+        return ""
+    return "\n".join(c.text for c in doc.clauses if c.ref == source.clause_id)
 
 
 def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
@@ -213,7 +269,8 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
         if len(places) == 1:
             row = row.model_copy(update={"quote": places[0]})
     valid_from, valid_to = _iso(row.valid_from), _iso(row.valid_to)
-    percent = "%" in row.amount or bool(amount is not None and re.search(
+    # A percentage: «45%» in the amount or the quote, or a table row whose «%» heads the column and whose label says so.
+    percent = "%" in row.amount or _PERCENT_LABEL.search(row.label or "") is not None or bool(amount is not None and re.search(
         rf"(?<![\d,.]){re.escape(row.amount.strip().rstrip('%').strip())}{_PERCENT_AFTER}", row.quote or ""))
     base = {"label": row.label, "amount": amount if amount is not None else 0, "vat": row.vat,
             "unit": "%" if percent else "RUB",
@@ -230,8 +287,17 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
 
     def checks() -> Iterator[CheckResult]:
         yield check_not_redacted(row.quote, row.amount)
+        if amount == 0:  # «60%» read as «б0%»: the letter is not turned back into a digit, that would be a guess
+            yield CheckResult(ok=False, code="zero_amount", reason="сумма 0 — скорее всего, ошибка распознавания")
         if _PENALTY.search(row.label or "") or (_PENALTY.search(row.quote or "") and not _PRICE.search(row.quote or "")):
             yield CheckResult(ok=False, code="not_a_rate", reason="штраф или неустойка — это условие о штрафах, не ставка")
+        if not _REWARD.search(f"{row.label or ''} {row.quote or ''}") and (
+                _PLAN_NAME.search(row.label or "") or _PLAN_NAME.search(row.quote or "")
+                or (percent and _BARE_PERCENT_ROW.match(" ".join((row.quote or "").split()))
+                    and _TARGET_TABLE.search(_clause_text(doc, base["source"])))):
+            yield CheckResult(ok=False, code="not_a_rate", reason="плановый показатель — не ставка")
+        if _PAYMENT_PART.search(f"{row.label or ''} {row.quote or ''}"):
+            yield CheckResult(ok=False, code="not_a_rate", reason="часть вознаграждения — порядок выплаты, не ставка")
         if len(places) > 1:
             yield CheckResult(ok=False, code="reanchor_ambiguous", reason=(
                 f"сумма {amount} со словами «{row.label}» есть на странице {row.page} в {len(places)} местах"))
@@ -242,12 +308,18 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
         yield check_ocr_confidence(row.quote, page, threshold)
         yield check_value_on_page(str(amount), "money", page, spans, threshold)
         yield check_period_near(amount, [base["valid_from"], base["valid_to"]], page, spans, threshold)
+        if base["unit"] == "RUB" and _in_rubles(amount, row.quote or "") is None:
+            yield CheckResult(ok=False, code="ambiguous_unit", reason="сумма записана и в рублях, и в копейках")
 
     if failed := _first_failure(checks()):
         return RateRow(**base, status=_status(failed), reason=_reason(failed))
+    if base["unit"] == "RUB":  # a recalculation, not a guess: the quote says which unit the number is in
+        base["amount"] = _in_rubles(amount, row.quote or "")
     said = _vat_said(row.quote or "", page)
-    # VAT is what the document says for the row; the model's word counts only where the document agrees.
-    base["vat"] = row.vat if row.vat in said else (next(iter(said)) if len(said) == 1 else "unknown")
+    # VAT is what the document says for the row; the model's word counts only where the document agrees. A
+    # percentage carries no VAT: «руб. без НДС» in a neighbouring column belongs to the ruble amounts.
+    base["vat"] = "unknown" if base["unit"] == "%" else (
+        row.vat if row.vat in said else (next(iter(said)) if len(said) == 1 else "unknown"))
     return RateRow(**base, status=ValueStatus.ACCEPTED, reason="quote_reanchored" if places else None)
 
 
@@ -284,6 +356,12 @@ def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
     def checks() -> Iterator[CheckResult]:
         found, spans = locate_quote(op.quote, page, settings.ocr_quote_fuzzy_threshold)
         yield found
+        # «Настоящее Соглашение вступает в силу с …» dates the document itself; its date may still be effective_from.
+        folded = (op.quote or "").casefold()
+        if (op.op not in (OpType.TERMINATE, OpType.INVALIDATE_DOCUMENT) and _IN_FORCE_CUE.search(folded)
+                and not _OPERATION_VERB.search(folded)):
+            yield CheckResult(ok=False, code="not_an_operation",
+                              reason="пункт о вступлении документа в силу, а не изменение договора")
         if op.op in _NEEDS_TARGET and not (op.target or "").strip():
             yield CheckResult(ok=False, code="no_target",
                               reason="не указано, какой пункт, раздел или приложение меняет операция")

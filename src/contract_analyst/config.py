@@ -49,6 +49,7 @@ class Settings(BaseModel):
     openai_think_extra_body: dict = {}  # ... and for the agent's thinking turns
     llm_num_ctx: int = 16384
     llm_batch_tokens: int = 6000
+    llm_money_batch_tokens: int = 3000
     llm_max_tokens: int = 4096
     llm_think_max_tokens: int = 4096
     llm_keep_alive: str = "30m"
