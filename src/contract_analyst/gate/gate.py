@@ -186,13 +186,15 @@ def _reanchor(row: RateOut, amount: Decimal, doc: DocumentText) -> list[str]:
     return [quote for _, _, quote in places]
 
 
+# VAT by its abbreviation or written out in full («налог на добавленную стоимость»).
+_VAT = r"(?:ндс|налог\w*\s+на\s+добавленн\w*\s+стоимост\w*)"
 _VAT_SAID = {
-    "excluded": re.compile(r"без\s+(?:учёта\s+|учета\s+)?ндс|ндс\s+не\s+облага|не\s+облага\w*\s+ндс"
-                           r"|\bне\s+включа\w*\s+(?:в\s+себя\s+)?ндс|ндс\s+не\s+включ"
-                           r"|(?:кроме\s+того|сверх\s+того|плюс)\s+ндс|ндс\s+(?:начисля|уплачива|оплачива)\w*\s+"
+    "excluded": re.compile(rf"без\s+(?:учёта\s+|учета\s+)?{_VAT}|{_VAT}\s+не\s+облага|не\s+облага\w*\s+{_VAT}"
+                           rf"|\bне\s+включа\w*\s+(?:в\s+себя\s+)?{_VAT}|{_VAT}\s+не\s+включ"
+                           rf"|(?:кроме\s+того|сверх\s+того|плюс)\s+{_VAT}|{_VAT}\s+(?:начисля|уплачива|оплачива)\w*\s+"
                            r"(?:дополнительно|сверх)"),
-    "included": re.compile(r"(?:с\s+учётом|с\s+учетом|(?<!\bне\s)включа\w*(?:\s+в\s+себя)?|в\s+т\.\s*ч\.|в\s+том\s+числе)"
-                           r"\s+ндс|\bс\s+ндс|ндс\s+включ"),
+    "included": re.compile(rf"(?:с\s+учётом|с\s+учетом|(?<!\bне\s)включа\w*(?:\s+в\s+себя)?|в\s+т\.\s*ч\.|в\s+том\s+числе)"
+                           rf"\s+{_VAT}|\bс\s+{_VAT}|{_VAT}\s+включ"),
 }
 # The table a row belongs to starts at its «Таблица №…» or at the clause above it: a header that states VAT for the
 # rows may stand far above a long table, but never passes to the next table.
