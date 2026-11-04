@@ -638,3 +638,34 @@ def test_a_rate_whose_percent_sign_stands_only_in_the_column_header_is_a_percent
     row = gate_rate(RateOut(label="Тариф Старт — процент от суммы оплаченных Клиентом начислений", amount="45",
                             vat="excluded", page=1, quote="Тариф Старт\n45\n2000"), table, load_settings())
     assert (row.status, row.unit, row.vat) == ("accepted", "%", "unknown")
+
+
+_TARGETS = ("2.2. Компания устанавливает Перечень Плановых показателей к выполнению.\nТаблица № 5\n"
+            "Плановый показатель | Целевое значение выполнения планового показателя\n"
+            "План подключений 95%\nПлан подключений с переносом номера 100%\nТребования к ассортименту 95%\n"
+            "2.3. Компания выплачивает Агенту вознаграждение при выполнении Плановых показателей:\n"
+            "% от оплаченных Клиентом начислений (при выполнении плановых показателей №1): 45\n"
+            "Ставка вознаграждения (руб. без НДС)\nТариф Старт 300\n"
+            "Увеличение значения X за каждый выполненный плановый показатель: 2 п.п.")
+
+
+@pytest.mark.parametrize(("label", "amount", "quote"), [
+    ("План подключений", "95%", "План подключений 95%"),
+    ("План подключений с переносом номера", "100%", "План подключений с переносом номера 100%"),
+    ("Требования к ассортименту", "95%", "Требования к ассортименту 95%")])
+def test_a_sales_target_is_not_a_rate(label, amount, quote):
+    """A target («целевое значение выполнения планового показателя») is the share of the plan to reach, not a price."""
+    row = gate_rate(RateOut(label=label, amount=amount, page=1, quote=quote), text_doc([_TARGETS]), load_settings())
+    assert (row.status, row.reason.split(":")[0]) == ("rejected", "not_a_rate")
+
+
+@pytest.mark.parametrize(("label", "amount", "quote", "unit"), [
+    ("% от оплаченных Клиентом начислений (при выполнении плановых показателей №1)", "45",
+     "% от оплаченных Клиентом начислений (при выполнении плановых показателей №1): 45", "%"),
+    ("Тариф Старт", "300", "Тариф Старт 300", "RUB"),
+    ("Тариф Старт (при выполнении плановых показателей №1)", "300", "Тариф Старт 300", "RUB"),
+    ("Увеличение значения X за каждый выполненный плановый показатель, п.п.", "2",
+     "Увеличение значения X за каждый выполненный плановый показатель: 2 п.п.", "RUB")])
+def test_a_reward_paid_when_targets_are_met_is_still_a_rate(label, amount, quote, unit):
+    row = gate_rate(RateOut(label=label, amount=amount, page=1, quote=quote), text_doc([_TARGETS]), load_settings())
+    assert (row.status, row.unit) == ("accepted", unit), row.reason

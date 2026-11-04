@@ -204,7 +204,22 @@ def _vat_said(quote: str, page: Page) -> set[str]:
 _PENALTY = re.compile(r"штраф|пен[яиь]|неустойк", re.IGNORECASE)
 _PRICE = re.compile(r"вознагражд|ставк|цен[аы]|стоимост|плат[аы]|тариф|оплат", re.IGNORECASE)
 _PERCENT_LABEL = re.compile(r"%|\bпроцент", re.IGNORECASE)
+# A sales target is the share of a plan to reach, not a price: «План подключений 95%» under the column «Целевое значение
+# выполнения планового показателя». A reward paid «при выполнении плановых показателей» names its price.
+# The row is named by the plan («План подключений», «Плановые показатели по …»); «при выполнении плановых показателей»
+# is a condition of a reward. In the target table every row is a bare «name NN%».
+_PLAN_NAME = re.compile(r"^\W*план", re.IGNORECASE)
+_BARE_PERCENT_ROW = re.compile(r"^\D{3,150}?\s\d{1,3}(?:[.,]\d+)?\s*%$")
+_TARGET_TABLE = re.compile(r"целев\w*\s+значени\w*\s+выполнени", re.IGNORECASE)
+_REWARD = re.compile(rf"{_PRICE.pattern}|оплач|начислени|выплач", re.IGNORECASE)
 _PERCENT_AFTER = r"\s*(?:\([^)]{0,80}\)\s*)?(?:%|процент)"  # «60%», «60 (шестьдесят) процентов»
+
+
+def _clause_text(doc: DocumentText, source: Source | None) -> str:
+    """The whole clause holding a quote, across pages: a table's column header may stand a page above the row."""
+    if source is None or source.clause_id is None:
+        return ""
+    return "\n".join(c.text for c in doc.clauses if c.ref == source.clause_id)
 
 
 def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
@@ -237,6 +252,11 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
             yield CheckResult(ok=False, code="zero_amount", reason="сумма 0 — скорее всего, ошибка распознавания")
         if _PENALTY.search(row.label or "") or (_PENALTY.search(row.quote or "") and not _PRICE.search(row.quote or "")):
             yield CheckResult(ok=False, code="not_a_rate", reason="штраф или неустойка — это условие о штрафах, не ставка")
+        if not _REWARD.search(f"{row.label or ''} {row.quote or ''}") and (
+                _PLAN_NAME.search(row.label or "") or _PLAN_NAME.search(row.quote or "")
+                or (percent and _BARE_PERCENT_ROW.match(" ".join((row.quote or "").split()))
+                    and _TARGET_TABLE.search(_clause_text(doc, base["source"])))):
+            yield CheckResult(ok=False, code="not_a_rate", reason="плановый показатель — не ставка")
         if len(places) > 1:
             yield CheckResult(ok=False, code="reanchor_ambiguous", reason=(
                 f"сумма {amount} со словами «{row.label}» есть на странице {row.page} в {len(places)} местах"))
