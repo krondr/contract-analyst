@@ -29,7 +29,7 @@ from contract_analyst.models import (
     ValueStatus,
 )
 from contract_analyst.parsing.header import HeaderGuess, detect_draft
-from contract_analyst.parsing.patterns import find_doc_numbers
+from contract_analyst.parsing.patterns import doc_number_spans, find_doc_numbers
 from contract_analyst.understand.routing import select_clauses, select_term_clauses
 from contract_analyst.understand.schemas import DatesOut, HeaderOut, OpsOut, RatesOut, TermsOut, ValueOut
 
@@ -102,6 +102,27 @@ def name_amended_agreement(target: str | None, doc: DocumentText, parent: Extrac
     if number and parent.source and _TO_AGREEMENT.search(parent.source.quote or ""):
         return f"{target} № {number}"
     return target
+
+
+def drop_own_contract_number(op: OpType | str, target: str | None, parent: Extracted | None) -> str | None:
+    """A supplement changes its contract unless it names another document, so «п. 5.1 Договора № <its contract>» is
+    «п. 5.1 Договора»: the same operation, spelled as an operation on the contract. Kept: a number of another
+    document, a parent the document calls an agreement (it may be one of several), a clause operation's target that
+    would keep no reference, and an invalidation, whose target is the number."""
+    number = getattr(parent.value, "number", parent.value) if parent and parent.status == ValueStatus.ACCEPTED else None
+    if (not target or not number or str(op) == OpType.INVALIDATE_DOCUMENT
+            or (parent.source and _TO_AGREEMENT.search(parent.source.quote or ""))):
+        return target
+    spans = [(start, end) for n, start, end in doc_number_spans(target) if n == number]
+    if not spans:
+        return target
+    kept = target
+    for start, end in reversed(spans):
+        kept = re.sub(r"\s*№\s*$", "", kept[:start]) + kept[end:]
+    kept = " ".join(kept.split()).strip(" ,;")
+    if OpType(str(op)) in _ON_CLAUSES and not re.search(r"\d", kept):
+        return target
+    return kept or None
 
 
 def _merge(regex: Extracted[str] | None, llm: Extracted[str] | None) -> Extracted[str]:
@@ -216,6 +237,8 @@ def _run_group(acc: _Acc, doc: DocumentText, group: str, client: LLMClient, sett
                     acc.rates.append(gated)
         elif group == "ops":
             for op in out.ops:
+                op = op.model_copy(update={"target": drop_own_contract_number(
+                    op.op, op.target, acc.header_values.get("parent_number"))})
                 if op.op in _ON_CLAUSES:
                     op = op.model_copy(update={"target": name_amended_agreement(
                         op.target, doc, acc.header_values.get("parent_number"))})

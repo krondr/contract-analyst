@@ -72,11 +72,19 @@ def parse_ru_date(s: str) -> date | None:
 
 # OCR on scans reads the leading Latin D as 0, Cyrillic О or Д; the -NN suffix keeps this from matching
 # arbitrary ten-digit numbers.
-_OCR_NUMBER_RE = re.compile(r"(?<![0-9A-Za-zА-Яа-я])(?:D|[0ОOДD](?=\d{9}-\d{2}(?!\d)))(\d{9}(?:-\d{2})?)(?!\d)")
+# The suffix may follow any dash a text layer or a typist puts there («D…–01», «D…—01»); it is written with a hyphen.
+_NUMBER_DASH = "-\u2010\u2011\u2012\u2013\u2014\u2212"
+_OCR_NUMBER_RE = re.compile(rf"(?<![0-9A-Za-zА-Яа-я])(?:D|[0ОOДD](?=\d{{9}}[{_NUMBER_DASH}]\d{{2}}(?!\d)))"
+                            rf"(\d{{9}})(?:[{_NUMBER_DASH}](\d{{2}}))?(?!\d)")
+
+
+def doc_number_of(match: re.Match[str]) -> str:
+    """The number an `_OCR_NUMBER_RE` match reads, spelled «D<9 digits>-NN»."""
+    return f"D{match.group(1)}" + (f"-{match.group(2)}" if match.group(2) else "")
 
 
 def doc_number_spans(text: str) -> list[tuple[str, int, int]]:
-    return [(f"D{m.group(1)}", m.start(), m.end()) for m in _OCR_NUMBER_RE.finditer(text)]
+    return [(doc_number_of(m), m.start(), m.end()) for m in _OCR_NUMBER_RE.finditer(text)]
 
 
 def find_doc_numbers(text: str) -> list[str]:

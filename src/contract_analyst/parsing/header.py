@@ -9,7 +9,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from contract_analyst.ingest.normalize import normalize_text
-from contract_analyst.parsing.patterns import _OCR_NUMBER_RE, find_dates, find_doc_numbers
+from contract_analyst.parsing.patterns import _OCR_NUMBER_RE, doc_number_of, find_dates, find_doc_numbers
 
 _TITLE_RE = re.compile(r"^\s*(?:(?!дополнительн)[А-ЯЁа-яё-]+(?:ий|ый|ой|ая|ое)\s+)?(дополнительное\s+соглашение|соглашение|договор)\b",
                        re.IGNORECASE)
@@ -43,7 +43,7 @@ def _parent_reference(text: str) -> tuple[str, date, str] | None:
             continue
         num = numbers[0]
         pos, d, span = min(dates, key=lambda item: abs(item[0] - num.start()))
-        return f"D{num.group(1)}", d, text[anchor.start(): anchor.end() + max(num.end(), pos + len(span))]
+        return doc_number_of(num), d, text[anchor.start(): anchor.end() + max(num.end(), pos + len(span))]
     return None
 
 

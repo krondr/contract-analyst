@@ -725,3 +725,50 @@ def test_vat_of_one_table_does_not_pass_to_the_next():
     text = ("Таблица №1\nСтавка, руб. с НДС\nТариф Старт 300\nТаблица №2\nДоплата за подключение\nТариф Старт 150")
     assert _row(text, "Тариф Старт", "300", "Тариф Старт 300").vat == "included"
     assert _row(text, "Доплата за подключение, Тариф Старт", "150", "Тариф Старт 150").vat == "unknown"
+
+
+@pytest.mark.parametrize(("amount", "quote"), [
+    ("0,5", "Исполнитель уплачивает штраф в размере 0,5% от суммы вознаграждения за отчётный месяц"),
+    ("3000", "но не менее 3 000 (трёх тысяч) рублей за каждый случай нарушения"),
+    ("2000", "Агент возмещает 2 000 рублей за каждое нарушение порядка оформления договоров")])
+def test_a_penalty_counted_from_the_reward_is_not_a_rate(amount, quote):
+    row = _row(quote + ".", "Вознаграждение Агента", amount, quote)
+    assert (row.status, row.reason.split(":")[0]) == ("rejected", "not_a_rate")
+
+
+def test_a_reward_that_mentions_a_penalty_elsewhere_is_still_a_rate():
+    quote = "Вознаграждение составляет 300 рублей за каждого Абонента, штраф начисляется отдельно"
+    assert _row(quote + ".", "Вознаграждение", "300", quote).status == "accepted"
+
+
+@pytest.mark.parametrize(("text", "quote", "amount", "vat"), [
+    ("3.1. Стоимость услуги составляет 3 100 (три тысячи сто) рублей. Указанные суммы включают НДС.",
+     "3 100 (три тысячи сто) рублей", "3100", "included"),
+    ("2.2. Стоимость доставки составляет 2 400 рублей 00 копеек, кроме того НДС 20%.",
+     "2 400 рублей 00 копеек", "2400", "excluded"),
+    ("4.1. Цена работ — 15 000 рублей, сверх того НДС по ставке 20%.", "15 000 рублей", "15000", "excluded"),
+    ("3.1. Стоимость Услуг составляет 70 000 рублей в месяц. НДС не облагается.",
+     "Стоимость Услуг составляет 70 000 рублей в месяц", "70000", "excluded"),
+    ("3.1. Стоимость Услуг составляет 70 000 рублей в месяц. Суммы не включают НДС.",
+     "Стоимость Услуг составляет 70 000 рублей в месяц", "70000", "excluded")])
+def test_vat_stated_after_the_amount_in_its_clause_applies_to_it(text, quote, amount, vat):
+    assert _row(text, "Стоимость", amount, quote).vat == vat
+
+
+def test_vat_stated_in_the_next_clause_does_not_apply():
+    text = "3.1. Стоимость уборки 1 000 рублей.\n3.2. Стоимость мойки окон 2 000 рублей, кроме того НДС."
+    assert _row(text, "Стоимость уборки", "1000", "Стоимость уборки 1 000 рублей").vat == "unknown"
+
+
+@pytest.mark.parametrize("quote", [
+    "Пункт 2.3 Договора в редакции настоящего Соглашения применяется с 01 июня 2026 года",
+    "Прайс-лист в новой редакции применяется к заказам, оформленным начиная с 01.02.2027"])
+def test_the_date_a_change_applies_from_is_not_an_operation_of_its_own(quote):
+    r = gate_op(OpOut(op="other", target="2.3", page=1, quote=quote), text_doc([f"3. {quote}."]), load_settings())
+    assert (r.status, r.reason.split(":")[0]) == ("rejected", "not_an_operation")
+
+
+def test_a_clause_that_stops_applying_is_still_an_operation():
+    quote = "Пункт 2.3 Договора не применяется с 01 июня 2026 года"
+    r = gate_op(OpOut(op="other", target="2.3", page=1, quote=quote), text_doc([f"3. {quote}."]), load_settings())
+    assert r.reason is None or not r.reason.startswith("not_an_operation"), r.reason

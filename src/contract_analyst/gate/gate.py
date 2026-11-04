@@ -188,9 +188,11 @@ def _reanchor(row: RateOut, amount: Decimal, doc: DocumentText) -> list[str]:
 
 _VAT_SAID = {
     "excluded": re.compile(r"без\s+(?:учёта\s+|учета\s+)?ндс|ндс\s+не\s+облага|не\s+облага\w*\s+ндс"
-                           r"|\bне\s+включая\s+ндс|ндс\s+не\s+включ"),
-    "included": re.compile(r"(?:с\s+учётом|с\s+учетом|(?<!\bне\s)включая|в\s+т\.\s*ч\.|в\s+том\s+числе)\s+ндс"
-                           r"|\bс\s+ндс|ндс\s+включ"),
+                           r"|\bне\s+включа\w*\s+(?:в\s+себя\s+)?ндс|ндс\s+не\s+включ"
+                           r"|(?:кроме\s+того|сверх\s+того|плюс)\s+ндс|ндс\s+(?:начисля|уплачива|оплачива)\w*\s+"
+                           r"(?:дополнительно|сверх)"),
+    "included": re.compile(r"(?:с\s+учётом|с\s+учетом|(?<!\bне\s)включа\w*(?:\s+в\s+себя)?|в\s+т\.\s*ч\.|в\s+том\s+числе)"
+                           r"\s+ндс|\bс\s+ндс|ндс\s+включ"),
 }
 # The table a row belongs to starts at its «Таблица №…» or at the clause above it: a header that states VAT for the
 # rows may stand far above a long table, but never passes to the next table.
@@ -208,16 +210,33 @@ def _find_flat(quote: str, text: str) -> int:
 
 
 def _vat_said(quote: str, page: Page) -> set[str]:
-    """VAT treatments said in the quote or above it in the same table (its header)."""
+    """VAT treatments said in the quote, above it in the same table (its header), or after it in the same clause
+    («… 2 400 рублей, кроме того НДС», «Указанные суммы включают НДС»)."""
     text, q = page.text.casefold(), quote.casefold().strip()
     at = _find_flat(q, text)
-    starts = [m.start() for m in _TABLE_START.finditer(text, 0, at)] if at >= 0 else []
-    context = q + "\n" + (text[starts[-1] if starts else 0:at] if at >= 0 else "")
+    if at < 0:
+        return {vat for vat, pattern in _VAT_SAID.items() if pattern.search(q)}
+    starts = [m.start() for m in _TABLE_START.finditer(text, 0, at)]
+    after = _TABLE_START.search(text, at + 1)
+    context = q + "\n" + text[starts[-1] if starts else 0:after.start() if after else len(text)]
     return {vat for vat, pattern in _VAT_SAID.items() if pattern.search(context)}
 
 
 _PENALTY = re.compile(r"штраф|пен[яиь]|неустойк", re.IGNORECASE)
+# «… рублей за каждый случай нарушения» is a penalty though it does not say so.
+_FOR_A_BREACH = re.compile(r"\bза\s+(?:каждый\s+(?:факт\s+|случай\s+)?|каждое\s+)?нарушени", re.IGNORECASE)
 _PRICE = re.compile(r"вознагражд|ставк|цен[аы]|стоимост|плат[аы]|тариф|оплат", re.IGNORECASE)
+# The base a penalty is counted from («0,5% от суммы вознаграждения») names a price without being one.
+_PRICE_AS_BASE = re.compile(rf"\bот\s+(?:(?:общей\s+)?(?:суммы|размера)\s+)?(?:{_PRICE.pattern})\w*", re.IGNORECASE)
+
+
+def _is_penalty(label: str, quote: str) -> bool:
+    """A penalty or a sum due for a breach: named so by its label, or by its quote where no price is named other than
+    the base it is counted from."""
+    if _PENALTY.search(label):
+        return True
+    return bool((_PENALTY.search(quote) or _FOR_A_BREACH.search(quote))
+                and not _PRICE.search(_PRICE_AS_BASE.sub(" ", quote)))
 _PERCENT_LABEL = re.compile(r"%|\bпроцент", re.IGNORECASE)
 # A sales target is the share of a plan to reach, not a price: «План подключений 95%» under the column «Целевое значение
 # выполнения планового показателя». A reward paid «при выполнении плановых показателей» names its price.
@@ -289,7 +308,7 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
         yield check_not_redacted(row.quote, row.amount)
         if amount == 0:  # «60%» read as «б0%»: the letter is not turned back into a digit, that would be a guess
             yield CheckResult(ok=False, code="zero_amount", reason="сумма 0 — скорее всего, ошибка распознавания")
-        if _PENALTY.search(row.label or "") or (_PENALTY.search(row.quote or "") and not _PRICE.search(row.quote or "")):
+        if _is_penalty(row.label or "", row.quote or ""):
             yield CheckResult(ok=False, code="not_a_rate", reason="штраф или неустойка — это условие о штрафах, не ставка")
         if not _REWARD.search(f"{row.label or ''} {row.quote or ''}") and (
                 _PLAN_NAME.search(row.label or "") or _PLAN_NAME.search(row.quote or "")
@@ -335,6 +354,11 @@ def _stated_start(quote: str | None) -> str | None:
     return next(iter(starts)).isoformat() if len(starts) == 1 else None
 
 
+# «Пункт 4.1 в редакции настоящего Соглашения применяется с 01.05.2026» dates a change made elsewhere in the document;
+# on its own it changes nothing. «… не применяется с …» does: it stops a clause.
+_APPLIES_FROM = re.compile(r"(?<!\bне\s)\bпримен\w*(?=[^.;]{0,160}?(?:\bс|\bсо|начиная\s+с)\s*[«\"]?\s*\d)", re.IGNORECASE)
+
+
 def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
     if op.op == OpType.INVALIDATE_DOCUMENT and (op.effective_from or op.effective_to):
         # The fold cancels an invalidated document outright and never dates it, so a date the model attached (often the
@@ -362,6 +386,9 @@ def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
                 and not _OPERATION_VERB.search(folded)):
             yield CheckResult(ok=False, code="not_an_operation",
                               reason="пункт о вступлении документа в силу, а не изменение договора")
+        if op.op == OpType.OTHER and _APPLIES_FROM.search(folded) and not _OPERATION_VERB.search(folded):
+            yield CheckResult(ok=False, code="not_an_operation",
+                              reason="пункт о дате, с которой применяется изменение, а не отдельное изменение")
         if op.op in _NEEDS_TARGET and not (op.target or "").strip():
             yield CheckResult(ok=False, code="no_target",
                               reason="не указано, какой пункт, раздел или приложение меняет операция")
