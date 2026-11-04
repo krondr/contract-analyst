@@ -389,3 +389,15 @@ def test_the_term_call_skips_a_clause_that_applies_a_rate_from_a_date():
             + "\n".join(f"{i}. Условие номер {i} без дат." for i in range(1, 6))
             + "\n6. Ставка вознаграждения применяется с 01.03.2021.")
     assert _term_ids(text_doc([text])) == []
+
+
+@pytest.mark.parametrize("clause", [
+    "Правила о договорной неустойке применяются при условии направления Акта о нарушениях.",
+    "Положения настоящего Приложения, касающиеся проверки договоров, распространяются на все Абонентские договоры.",
+    "На условиях настоящего Договора Исполнитель применяет тарифы Заказчика."])
+def test_the_term_call_skips_a_clause_where_something_else_applies(clause):
+    """Only the document itself applying from a date is its term; a rule, a provision or a tariff that applies is
+    not, and a long contract has dozens of such clauses that would drown the real one."""
+    text = ("Дополнительное соглашение № D990000002-01\nг. Тверь 21.01.2021\n"
+            + "\n".join(f"{i}. Условие номер {i} без дат." for i in range(1, 6)) + f"\n6. {clause}")
+    assert _term_ids(text_doc([text])) == []
