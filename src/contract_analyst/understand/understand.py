@@ -208,6 +208,20 @@ class _Acc:
             self.terms[field] = old.model_copy(update={"value": f"{old.value}; {ext.value}"})
 
 
+def _open(found: Extracted | None) -> bool:
+    """A field a later call may still fill: not found, or found and refused by the gate."""
+    return found is None or found.status in (ValueStatus.ABSENT, ValueStatus.REJECTED)
+
+
+def _fill(values: dict, field: str, new: Extracted) -> None:
+    """A later answer fills what is not found yet, and replaces a refused value only with an accepted one: a start
+    the gate refused (the signing date offered as the start) must not hide the term clause's real start."""
+    found = values.get(field)
+    if found is None or found.status == ValueStatus.ABSENT or (
+            found.status == ValueStatus.REJECTED and new.status == ValueStatus.ACCEPTED):
+        values[field] = new
+
+
 def _run_group(acc: _Acc, doc: DocumentText, group: str, client: LLMClient, settings: Settings,
                supplement: bool = False) -> None:
     schema = GROUP_SCHEMAS[group]
@@ -218,9 +232,8 @@ def _run_group(acc: _Acc, doc: DocumentText, group: str, client: LLMClient, sett
         if group == "header":
             acc.header = acc.header or out
             for field, kind in _HEADER_KINDS.items():  # a later batch fills what the earlier ones did not find
-                found = acc.header_values.get(field)
-                if found is None or found.status == ValueStatus.ABSENT:
-                    acc.header_values[field] = _gate_value(field, getattr(out, field), kind, doc, settings)
+                if _open(acc.header_values.get(field)):
+                    _fill(acc.header_values, field, _gate_value(field, getattr(out, field), kind, doc, settings))
             acc.parties = acc.parties or [
                 Party(role=p.role, org_type=_gate_value("org_type", p.org_type, "text", doc, settings),
                       name=_gate_value("name", p.name, "text", doc, settings)) for p in out.parties]
@@ -255,8 +268,7 @@ def _run_group(acc: _Acc, doc: DocumentText, group: str, client: LLMClient, sett
 def _run_term(acc: _Acc, doc: DocumentText, client: LLMClient, settings: Settings) -> None:
     """When the document itself starts and ends, from the clauses that say so (usually near its end), in a call of
     its own: the header batch, which also classifies the document, stays the same. Fills only what it did not find."""
-    missing = [f for f in _DOCUMENT_TERM if acc.header_values.get(f) is None
-               or acc.header_values[f].status == ValueStatus.ABSENT]
+    missing = [f for f in _DOCUMENT_TERM if _open(acc.header_values.get(f))]
     for batch in select_term_clauses(doc, settings) if missing else []:
         kind = acc.header.kind.value if acc.header else "unknown"
         body = "\n\n".join(f"[стр. {c.page}] {c.text}" for c in batch)
@@ -264,8 +276,8 @@ def _run_term(acc: _Acc, doc: DocumentText, client: LLMClient, settings: Setting
                     {"role": "user", "content": f"Документ: {doc.file.name} (вид: {kind})\n\n{body}"}]
         out = _call(client, messages, DatesOut, acc.issues, doc, "dates")
         for field in missing if out is not None else []:
-            if acc.header_values.get(field) is None or acc.header_values[field].status == ValueStatus.ABSENT:
-                acc.header_values[field] = _gate_value(field, getattr(out, field), "date", doc, settings)
+            if _open(acc.header_values.get(field)):
+                _fill(acc.header_values, field, _gate_value(field, getattr(out, field), "date", doc, settings))
 
 
 def _parent(number: Extracted[str], when: Extracted[str]) -> dict:

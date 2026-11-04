@@ -310,3 +310,21 @@ def test_the_number_of_the_contract_a_supplement_amends_is_dropped_from_its_targ
     from contract_analyst.understand.understand import drop_own_contract_number
 
     assert drop_own_contract_number(op, target, parent) == expected
+
+
+def test_a_start_the_gate_refused_is_replaced_by_the_term_call():
+    """The header batch offered the signing date as the start and the gate refused it (no «вступает в силу» there);
+    the term clause states the real start, and its answer must not be thrown away for the refused one."""
+    signing = {"value": "2021-01-21", "page": 1, "quote": "г. Тверь 21.01.2021"}
+    start = {"value": "2021-04-01", "page": 1, "quote": "Настоящий Договор вступает в силу с 01.04.2021"}
+    end = {"value": "2026-12-31", "page": 1, "quote": "и действует до 31.12.2026"}
+    rec = _understand(text_doc([TERM_LATE]), [_header_json(kind="main", effective_from=signing),
+                                              _dates_json(effective_from=start, effective_to=end)], groups=["header"])
+    assert (rec.effective_from.status, rec.effective_from.value) == ("accepted", date(2021, 4, 1))
+
+
+def test_a_refused_start_stays_refused_when_the_term_call_finds_nothing_better():
+    signing = {"value": "2021-01-21", "page": 1, "quote": "г. Тверь 21.01.2021"}
+    rec = _understand(text_doc([TERM_LATE]), [_header_json(kind="main", effective_from=signing), _dates_json()],
+                      groups=["header"])
+    assert rec.effective_from.status == "rejected"
