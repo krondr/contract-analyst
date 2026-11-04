@@ -188,9 +188,11 @@ def _reanchor(row: RateOut, amount: Decimal, doc: DocumentText) -> list[str]:
 
 _VAT_SAID = {
     "excluded": re.compile(r"без\s+(?:учёта\s+|учета\s+)?ндс|ндс\s+не\s+облага|не\s+облага\w*\s+ндс"
-                           r"|\bне\s+включая\s+ндс|ндс\s+не\s+включ"),
-    "included": re.compile(r"(?:с\s+учётом|с\s+учетом|(?<!\bне\s)включая|в\s+т\.\s*ч\.|в\s+том\s+числе)\s+ндс"
-                           r"|\bс\s+ндс|ндс\s+включ"),
+                           r"|\bне\s+включа\w*\s+(?:в\s+себя\s+)?ндс|ндс\s+не\s+включ"
+                           r"|(?:кроме\s+того|сверх\s+того|плюс)\s+ндс|ндс\s+(?:начисля|уплачива|оплачива)\w*\s+"
+                           r"(?:дополнительно|сверх)"),
+    "included": re.compile(r"(?:с\s+учётом|с\s+учетом|(?<!\bне\s)включа\w*(?:\s+в\s+себя)?|в\s+т\.\s*ч\.|в\s+том\s+числе)"
+                           r"\s+ндс|\bс\s+ндс|ндс\s+включ"),
 }
 # The table a row belongs to starts at its «Таблица №…» or at the clause above it: a header that states VAT for the
 # rows may stand far above a long table, but never passes to the next table.
@@ -208,11 +210,15 @@ def _find_flat(quote: str, text: str) -> int:
 
 
 def _vat_said(quote: str, page: Page) -> set[str]:
-    """VAT treatments said in the quote or above it in the same table (its header)."""
+    """VAT treatments said in the quote, above it in the same table (its header), or after it in the same clause
+    («… 2 400 рублей, кроме того НДС», «Указанные суммы включают НДС»)."""
     text, q = page.text.casefold(), quote.casefold().strip()
     at = _find_flat(q, text)
-    starts = [m.start() for m in _TABLE_START.finditer(text, 0, at)] if at >= 0 else []
-    context = q + "\n" + (text[starts[-1] if starts else 0:at] if at >= 0 else "")
+    if at < 0:
+        return {vat for vat, pattern in _VAT_SAID.items() if pattern.search(q)}
+    starts = [m.start() for m in _TABLE_START.finditer(text, 0, at)]
+    after = _TABLE_START.search(text, at + 1)
+    context = q + "\n" + text[starts[-1] if starts else 0:after.start() if after else len(text)]
     return {vat for vat, pattern in _VAT_SAID.items() if pattern.search(context)}
 
 
