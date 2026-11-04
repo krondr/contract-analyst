@@ -13,6 +13,8 @@ from rapidfuzz import fuzz
 
 from contract_analyst.config import Settings
 from contract_analyst.gate.checks import (
+    _IN_FORCE_CUE,
+    _OPERATION_VERB,
     CheckResult,
     ValueKind,
     _norm,
@@ -311,6 +313,12 @@ def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
     def checks() -> Iterator[CheckResult]:
         found, spans = locate_quote(op.quote, page, settings.ocr_quote_fuzzy_threshold)
         yield found
+        # «Настоящее Соглашение вступает в силу с …» dates the document itself; its date may still be effective_from.
+        folded = (op.quote or "").casefold()
+        if (op.op not in (OpType.TERMINATE, OpType.INVALIDATE_DOCUMENT) and _IN_FORCE_CUE.search(folded)
+                and not _OPERATION_VERB.search(folded)):
+            yield CheckResult(ok=False, code="not_an_operation",
+                              reason="пункт о вступлении документа в силу, а не изменение договора")
         if op.op in _NEEDS_TARGET and not (op.target or "").strip():
             yield CheckResult(ok=False, code="no_target",
                               reason="не указано, какой пункт, раздел или приложение меняет операция")

@@ -669,3 +669,17 @@ def test_a_sales_target_is_not_a_rate(label, amount, quote):
 def test_a_reward_paid_when_targets_are_met_is_still_a_rate(label, amount, quote, unit):
     row = gate_rate(RateOut(label=label, amount=amount, page=1, quote=quote), text_doc([_TARGETS]), load_settings())
     assert (row.status, row.unit) == ("accepted", unit), row.reason
+
+
+@pytest.mark.parametrize("op", ["other", "replace_clause"])
+def test_the_entry_into_force_of_a_supplement_is_not_an_operation(op):
+    quote = "Настоящее Соглашение вступает в силу с 01.04.2024"
+    r = gate_op(OpOut(op=op, target="5", page=1, quote=quote), text_doc([f"5. {quote}."]), load_settings())
+    assert (r.status, r.reason.split(":")[0]) == ("rejected", "not_an_operation")
+
+
+def test_an_operation_that_also_states_its_entry_into_force_is_kept():
+    quote = "Пункт 3.1 Договора изложить в следующей редакции, Соглашение вступает в силу с 01.04.2024"
+    r = gate_op(OpOut(op="replace_clause", target="3.1", page=1, quote=quote), text_doc([f"1. {quote}."]),
+                load_settings())
+    assert r.status == "accepted", r.reason
