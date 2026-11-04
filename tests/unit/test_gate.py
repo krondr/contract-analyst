@@ -758,3 +758,17 @@ def test_vat_stated_after_the_amount_in_its_clause_applies_to_it(text, quote, am
 def test_vat_stated_in_the_next_clause_does_not_apply():
     text = "3.1. Стоимость уборки 1 000 рублей.\n3.2. Стоимость мойки окон 2 000 рублей, кроме того НДС."
     assert _row(text, "Стоимость уборки", "1000", "Стоимость уборки 1 000 рублей").vat == "unknown"
+
+
+@pytest.mark.parametrize("quote", [
+    "Пункт 2.3 Договора в редакции настоящего Соглашения применяется с 01 июня 2026 года",
+    "Прайс-лист в новой редакции применяется к заказам, оформленным начиная с 01.02.2027"])
+def test_the_date_a_change_applies_from_is_not_an_operation_of_its_own(quote):
+    r = gate_op(OpOut(op="other", target="2.3", page=1, quote=quote), text_doc([f"3. {quote}."]), load_settings())
+    assert (r.status, r.reason.split(":")[0]) == ("rejected", "not_an_operation")
+
+
+def test_a_clause_that_stops_applying_is_still_an_operation():
+    quote = "Пункт 2.3 Договора не применяется с 01 июня 2026 года"
+    r = gate_op(OpOut(op="other", target="2.3", page=1, quote=quote), text_doc([f"3. {quote}."]), load_settings())
+    assert r.reason is None or not r.reason.startswith("not_an_operation"), r.reason

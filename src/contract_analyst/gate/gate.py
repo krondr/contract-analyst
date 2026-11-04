@@ -354,6 +354,11 @@ def _stated_start(quote: str | None) -> str | None:
     return next(iter(starts)).isoformat() if len(starts) == 1 else None
 
 
+# «Пункт 4.1 в редакции настоящего Соглашения применяется с 01.05.2026» dates a change made elsewhere in the document;
+# on its own it changes nothing. «… не применяется с …» does: it stops a clause.
+_APPLIES_FROM = re.compile(r"(?<!\bне\s)\bпримен\w*(?=[^.;]{0,160}?(?:\bс|\bсо|начиная\s+с)\s*[«\"]?\s*\d)", re.IGNORECASE)
+
+
 def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
     if op.op == OpType.INVALIDATE_DOCUMENT and (op.effective_from or op.effective_to):
         # The fold cancels an invalidated document outright and never dates it, so a date the model attached (often the
@@ -381,6 +386,9 @@ def gate_op(op: OpOut, doc: DocumentText, settings: Settings) -> AmendmentOp:
                 and not _OPERATION_VERB.search(folded)):
             yield CheckResult(ok=False, code="not_an_operation",
                               reason="пункт о вступлении документа в силу, а не изменение договора")
+        if op.op == OpType.OTHER and _APPLIES_FROM.search(folded) and not _OPERATION_VERB.search(folded):
+            yield CheckResult(ok=False, code="not_an_operation",
+                              reason="пункт о дате, с которой применяется изменение, а не отдельное изменение")
         if op.op in _NEEDS_TARGET and not (op.target or "").strip():
             yield CheckResult(ok=False, code="no_target",
                               reason="не указано, какой пункт, раздел или приложение меняет операция")
