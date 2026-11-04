@@ -18,6 +18,7 @@ from contract_analyst.parsing.patterns import (
     _OCR_NUMBER_RE,
     DOC_NUMBER_RE,
     date_spans,
+    doc_number_of,
     doc_number_spans,
     ends_table_row,
     find_dates,
@@ -453,7 +454,7 @@ _PARENT_ANCHOR = re.compile(r"\b(?:к|в|во|о\s+расторжении|о\s+�
 def check_parent_role(field: str, value: str | None, quote: str | None) -> CheckResult:
     if field != "parent_number" or not value or not quote:
         return _ok("parent_role_unchecked")
-    starts = [m.start() for m in _OCR_NUMBER_RE.finditer(quote) if f"D{m.group(1)}" == value]
+    starts = [m.start() for m in _OCR_NUMBER_RE.finditer(quote) if doc_number_of(m) == value]
     if not starts:
         return _ok("parent_role_unchecked")  # value_in_quote decides whether the number is there at all
     if any(_PARENT_ANCHOR.search(quote[max(0, start - 90):start]) for start in starts):

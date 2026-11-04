@@ -82,3 +82,9 @@ def test_ocr_misread_leading_d_is_normalized():
     assert find_doc_numbers("Соглашение № 0990000017-09 к Договору №0980000016-09") == ["D990000017-09", "D980000016-09"]
     assert find_doc_numbers("ДОГОВОР № Д990000018-01") == ["D990000018-01"]
     assert find_doc_numbers("индекс 109147 и счёт 0123456789") == []
+
+
+@pytest.mark.parametrize("dash", ["–", "—", "‑", "−"])
+def test_a_document_number_keeps_its_suffix_after_any_dash(dash):
+    text = f"ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № D990000002{dash}01 к Договору № D990000001-01"
+    assert find_doc_numbers(text) == ["D990000002-01", "D990000001-01"]
