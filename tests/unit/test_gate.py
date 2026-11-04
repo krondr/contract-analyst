@@ -703,3 +703,25 @@ def test_the_first_part_of_a_reward_is_how_it_is_paid_not_a_rate():
     row = gate_rate(RateOut(label="Первая часть вознаграждения", amount="10", page=1, quote=quote),
                     text_doc([quote + "."]), load_settings())
     assert (row.status, row.reason.split(":")[0]) == ("rejected", "not_a_rate")
+
+
+def _row(text: str, label: str, amount: str, quote: str):
+    return gate_rate(RateOut(label=label, amount=amount, page=1, quote=quote), text_doc([text]), load_settings())
+
+
+def test_vat_in_a_table_header_far_above_the_row_applies_to_it():
+    filler = "\n".join(f"Тарифный план группы {i}\n{100 + i}" for i in range(60))
+    text = f"1. Изложить Таблицу 1 в следующей редакции:\nТаблица №1\nНазвание\nСтавка, руб. без НДС\n{filler}\nИнтернет\n500"
+    assert text.find("Интернет") - text.find("без НДС") > 1000
+    assert _row(text, "Интернет", "500", "Интернет 500").vat == "excluded"
+
+
+def test_vat_is_found_when_the_cells_of_a_row_stand_on_separate_lines():
+    text = "Таблица №1\nСтавка вознаграждения (руб.\nбез НДС)\nТариф Старт\n270\n500\nТариф Макс\n675\n1200"
+    assert _row(text, "Тариф Макс", "1200", "Тариф Макс 675 1200").vat == "excluded"
+
+
+def test_vat_of_one_table_does_not_pass_to_the_next():
+    text = ("Таблица №1\nСтавка, руб. с НДС\nТариф Старт 300\nТаблица №2\nДоплата за подключение\nТариф Старт 150")
+    assert _row(text, "Тариф Старт", "300", "Тариф Старт 300").vat == "included"
+    assert _row(text, "Доплата за подключение, Тариф Старт", "150", "Тариф Старт 150").vat == "unknown"

@@ -192,14 +192,27 @@ _VAT_SAID = {
     "included": re.compile(r"(?:с\s+учётом|с\s+учетом|(?<!\bне\s)включая|в\s+т\.\s*ч\.|в\s+том\s+числе)\s+ндс"
                            r"|\bс\s+ндс|ндс\s+включ"),
 }
-_VAT_CONTEXT = 400  # characters above the row: the table header that states VAT for its rows
+# The table a row belongs to starts at its «Таблица №…» or at the clause above it: a header that states VAT for the
+# rows may stand far above a long table, but never passes to the next table.
+_TABLE_START = re.compile(r"таблиц\w*\s*№|^\s*\d{1,2}(?:\.\d{1,2})*\.\s+\S", re.IGNORECASE | re.MULTILINE)
+
+
+def _find_flat(quote: str, text: str) -> int:
+    """Where the quote starts on the page, whatever whitespace stands between its words (table cells are often one
+    per line in the text layer)."""
+    words = quote.split()[:8]
+    if not words:
+        return -1
+    m = re.search(r"\s+".join(map(re.escape, words)), text)
+    return m.start() if m else -1
 
 
 def _vat_said(quote: str, page: Page) -> set[str]:
-    """VAT treatments said in the quote or in the text just above it on the page (a table header)."""
+    """VAT treatments said in the quote or above it in the same table (its header)."""
     text, q = page.text.casefold(), quote.casefold().strip()
-    at = text.find(q[:40]) if q else -1
-    context = q + "\n" + (text[max(0, at - _VAT_CONTEXT):at] if at >= 0 else "")
+    at = _find_flat(q, text)
+    starts = [m.start() for m in _TABLE_START.finditer(text, 0, at)] if at >= 0 else []
+    context = q + "\n" + (text[starts[-1] if starts else 0:at] if at >= 0 else "")
     return {vat for vat, pattern in _VAT_SAID.items() if pattern.search(context)}
 
 
