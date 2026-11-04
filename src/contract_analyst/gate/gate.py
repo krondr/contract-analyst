@@ -217,6 +217,30 @@ _REWARD = re.compile(rf"{_PRICE.pattern}|оплач|начислени|выпл�
 _PERCENT_AFTER = r"\s*(?:\([^)]{0,80}\)\s*)?(?:%|процент)"  # «60%», «60 (шестьдесят) процентов»
 
 
+_NUMBER = re.compile(r"(?<![\d,.])\d{1,3}(?:[ \u00a0]\d{3})+(?:[.,]\d+)?|(?<![\d,.])\d+(?:[.,]\d+)?")
+_IN_WORDS = r"\s*(?:\([^)]{0,80}\)\s*)?"  # «10 (Десяти) копеек»
+_KOPECKS = re.compile(rf"^{_IN_WORDS}коп(?:\.|е)", re.IGNORECASE)
+_RUBLES_AND_KOPECKS = re.compile(rf"^{_IN_WORDS}руб\w*\.?\s*(\d{{1,2}}){_IN_WORDS}коп(?:\.|е)", re.IGNORECASE)
+_PAYMENT_PART = re.compile(r"част\w*\s+вознагражд", re.IGNORECASE)
+
+
+def _in_rubles(amount: Decimal, quote: str) -> Decimal | None:
+    """The amount in rubles as the quote writes it: «10 (Десяти) копеек» is 0.10, «10 рублей 50 копеек» is 10.50.
+    None when the quote writes the amount in more than one way."""
+    readings = set()
+    for m in _NUMBER.finditer(quote):
+        if amount not in find_numbers(m.group(0)):
+            continue
+        tail = quote[m.end():m.end() + 160]
+        if both := _RUBLES_AND_KOPECKS.match(tail):
+            readings.add(amount + Decimal(both.group(1)) / 100)
+        elif _KOPECKS.match(tail):
+            readings.add(amount / 100)
+        else:
+            readings.add(amount)
+    return next(iter(readings)) if len(readings) == 1 else (amount if not readings else None)
+
+
 def _clause_text(doc: DocumentText, source: Source | None) -> str:
     """The whole clause holding a quote, across pages: a table's column header may stand a page above the row."""
     if source is None or source.clause_id is None:
@@ -259,6 +283,8 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
                 or (percent and _BARE_PERCENT_ROW.match(" ".join((row.quote or "").split()))
                     and _TARGET_TABLE.search(_clause_text(doc, base["source"])))):
             yield CheckResult(ok=False, code="not_a_rate", reason="плановый показатель — не ставка")
+        if _PAYMENT_PART.search(f"{row.label or ''} {row.quote or ''}"):
+            yield CheckResult(ok=False, code="not_a_rate", reason="часть вознаграждения — порядок выплаты, не ставка")
         if len(places) > 1:
             yield CheckResult(ok=False, code="reanchor_ambiguous", reason=(
                 f"сумма {amount} со словами «{row.label}» есть на странице {row.page} в {len(places)} местах"))
@@ -269,9 +295,13 @@ def gate_rate(row: RateOut, doc: DocumentText, settings: Settings) -> RateRow:
         yield check_ocr_confidence(row.quote, page, threshold)
         yield check_value_on_page(str(amount), "money", page, spans, threshold)
         yield check_period_near(amount, [base["valid_from"], base["valid_to"]], page, spans, threshold)
+        if base["unit"] == "RUB" and _in_rubles(amount, row.quote or "") is None:
+            yield CheckResult(ok=False, code="ambiguous_unit", reason="сумма записана и в рублях, и в копейках")
 
     if failed := _first_failure(checks()):
         return RateRow(**base, status=_status(failed), reason=_reason(failed))
+    if base["unit"] == "RUB":  # a recalculation, not a guess: the quote says which unit the number is in
+        base["amount"] = _in_rubles(amount, row.quote or "")
     said = _vat_said(row.quote or "", page)
     # VAT is what the document says for the row; the model's word counts only where the document agrees. A
     # percentage carries no VAT: «руб. без НДС» in a neighbouring column belongs to the ruble amounts.

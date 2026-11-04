@@ -683,3 +683,23 @@ def test_an_operation_that_also_states_its_entry_into_force_is_kept():
     r = gate_op(OpOut(op="replace_clause", target="3.1", page=1, quote=quote), text_doc([f"1. {quote}."]),
                 load_settings())
     assert r.status == "accepted", r.reason
+
+
+@pytest.mark.parametrize(("amount", "quote", "rubles"), [
+    ("10", "вознаграждение составляет 10 (Десять) копеек (без учета НДС)", "0.10"),
+    ("10", "но не менее 10 (Десяти) копеек (без учета НДС)", "0.10"),
+    ("10", "вознаграждение составляет 10 рублей 50 копеек", "10.50"),
+    ("6500", "Стоимость доставки составляет 6 500 (шесть тысяч пятьсот) рублей 00 копеек", "6500"),
+    ("400,00", "вознаграждение в размере 400,00 (четыреста рублей 00 коп.) рублей", "400")])
+def test_an_amount_in_kopecks_is_written_in_rubles(amount, quote, rubles):
+    row = gate_rate(RateOut(label="Вознаграждение", amount=amount, page=1, quote=quote), text_doc([quote + "."]),
+                    load_settings())
+    assert (row.status, row.unit, row.amount) == ("accepted", "RUB", Decimal(rubles)), row.reason
+
+
+def test_the_first_part_of_a_reward_is_how_it_is_paid_not_a_rate():
+    quote = ("в месяце, следующем за месяцем Регистрации, вознаграждение выплачивается в размере 10 (Десяти) копеек "
+             "(Первая часть вознаграждения)")
+    row = gate_rate(RateOut(label="Первая часть вознаграждения", amount="10", page=1, quote=quote),
+                    text_doc([quote + "."]), load_settings())
+    assert (row.status, row.reason.split(":")[0]) == ("rejected", "not_a_rate")
