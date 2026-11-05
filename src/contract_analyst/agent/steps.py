@@ -219,6 +219,15 @@ def rerecognize(ctx: RunContext, doc_id: str, pages: list[int], strategy: str) -
                       hint="; ".join(h for h in hints if h) or None)
 
 
+def _merge_issues(old: list[Issue], new: list[Issue], groups: list[str]) -> list[Issue]:
+    """A group read again replaces its old model failure (the term call belongs to the header); the issues every
+    reading repeats (a draft, a title mismatch) are kept once."""
+    reread = {*groups, *(["dates"] if "header" in groups else [])}
+    kept = [i for i in old if not (i.code in LLM_FAILURES and any(f"группа {g} —" in i.message for g in reread))]
+    seen = {(i.code, i.message) for i in kept}
+    return kept + [i for i in new if (i.code, i.message) not in seen]
+
+
 def _merge_records(old: DocumentRecord, new: DocumentRecord, groups: list[str]) -> DocumentRecord:
     update = {}
     if "header" in groups:
@@ -231,7 +240,7 @@ def _merge_records(old: DocumentRecord, new: DocumentRecord, groups: list[str]) 
         update["rates"] = new.rates
     if "ops" in groups:
         update["ops"] = new.ops
-    update["issues"] = [*old.issues, *new.issues]
+    update["issues"] = _merge_issues(old.issues, new.issues, groups)
     merged = old.model_copy(update=update)
     # The start and the rows may come from different readings: whether undated rows wait for a start is judged on
     # the merged record, else rows read after the header (or before it) would skip the check.

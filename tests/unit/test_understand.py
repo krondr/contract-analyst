@@ -461,3 +461,17 @@ def test_rates_held_for_a_start_are_released_when_a_header_reread_finds_one():
     merged = _merge_records(held, header, ["header"])
     assert merged.effective_from.reason == "from_signing"
     assert _held(merged) == {Decimal(500): "accepted", Decimal(900): "accepted"}
+
+
+def test_a_reread_group_drops_its_old_model_failure_and_issues_are_not_repeated():
+    """Once the ops group answers on a re-read, its old timeout no longer marks the operations unread."""
+    from contract_analyst.agent.steps import _merge_records
+    from contract_analyst.models import Issue
+
+    timeout = Issue(code="llm_timeout", message="ДС.pdf: группа ops — LLM не ответила: timeout")
+    money_failed = Issue(code="llm_truncated", message="ДС.pdf: группа money — ответ оборвался")
+    draft = Issue(code="draft", message="ДС.pdf: похоже на проект, подписание не подтверждено")
+    rec = _understand(text_doc([_NO_START]), [_header_json(kind="supplement")], groups=["header"])
+    old = rec.model_copy(update={"issues": [timeout, money_failed, draft]})
+    new = rec.model_copy(update={"issues": [draft]})
+    assert [i.code for i in _merge_records(old, new, ["ops"]).issues] == ["llm_truncated", "draft"]
