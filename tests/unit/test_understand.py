@@ -310,3 +310,111 @@ def test_the_number_of_the_contract_a_supplement_amends_is_dropped_from_its_targ
     from contract_analyst.understand.understand import drop_own_contract_number
 
     assert drop_own_contract_number(op, target, parent) == expected
+
+
+def test_a_start_the_gate_refused_is_replaced_by_the_term_call():
+    """The header batch offered the signing date as the start and the gate refused it (no «вступает в силу» there);
+    the term clause states the real start, and its answer must not be thrown away for the refused one."""
+    signing = {"value": "2021-01-21", "page": 1, "quote": "г. Тверь 21.01.2021"}
+    start = {"value": "2021-04-01", "page": 1, "quote": "Настоящий Договор вступает в силу с 01.04.2021"}
+    end = {"value": "2026-12-31", "page": 1, "quote": "и действует до 31.12.2026"}
+    rec = _understand(text_doc([TERM_LATE]), [_header_json(kind="main", effective_from=signing),
+                                              _dates_json(effective_from=start, effective_to=end)], groups=["header"])
+    assert (rec.effective_from.status, rec.effective_from.value) == ("accepted", date(2021, 4, 1))
+
+
+def test_a_refused_start_stays_refused_when_the_term_call_finds_nothing_better():
+    signing = {"value": "2021-01-21", "page": 1, "quote": "г. Тверь 21.01.2021"}
+    rec = _understand(text_doc([TERM_LATE]), [_header_json(kind="main", effective_from=signing), _dates_json()],
+                      groups=["header"])
+    assert rec.effective_from.status == "rejected"
+
+
+# --- the start of a document (fix/wrong-values-p8) -------------------------------------------------------------
+
+_NO_START = ("Дополнительное соглашение № D990000002-01\nк Договору № D990000001-01 от 21.01.2021\nг. Тверь 01.02.2021\n"
+             "1. Стоимость услуги составляет 500 рублей.\n2. Стоимость выезда составляет 900 рублей с 01.03.2021.\n"
+             "3. Оплата производится в течение 5 дней с даты подписания Акта.")
+_RATES = json.dumps({"rates": [
+    {"label": "Стоимость услуги", "amount": "500", "page": 1, "quote": "Стоимость услуги составляет 500 рублей"},
+    {"label": "Стоимость выезда", "amount": "900", "valid_from": "2021-03-01", "page": 1,
+     "quote": "Стоимость выезда составляет 900 рублей с 01.03.2021"}]}, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("clause", [
+    "Настоящее Соглашение применяется к отношениям Сторон с 01.03.2021.",
+    "Настоящее Соглашение распространяет свое действие на отношения Сторон, возникшие с 01.03.2021.",
+    "Условия настоящего Дополнительного соглашения вводятся с 01.03.2021."])
+def test_the_term_call_reads_a_clause_that_says_from_when_the_document_applies(clause):
+    text = ("Дополнительное соглашение № D990000002-01\nг. Тверь 21.01.2021\n"
+            + "\n".join(f"{i}. Условие номер {i} без дат." for i in range(1, 6)) + f"\n6. {clause}")
+    assert _term_ids(text_doc([text])) == ["6"]
+
+
+def test_the_term_call_skips_a_clause_that_applies_a_rate_from_a_date():
+    text = ("Дополнительное соглашение № D990000002-01\nг. Тверь 21.01.2021\n"
+            + "\n".join(f"{i}. Условие номер {i} без дат." for i in range(1, 6))
+            + "\n6. Ставка вознаграждения применяется с 01.03.2021.")
+    assert _term_ids(text_doc([text])) == []
+
+
+@pytest.mark.parametrize("clause", [
+    "Правила о договорной неустойке применяются при условии направления Акта о нарушениях.",
+    "Положения настоящего Приложения, касающиеся проверки договоров, распространяются на все Абонентские договоры.",
+    "На условиях настоящего Договора Исполнитель применяет тарифы Заказчика."])
+def test_the_term_call_skips_a_clause_where_something_else_applies(clause):
+    """Only the document itself applying from a date is its term; a rule, a provision or a tariff that applies is
+    not, and a long contract has dozens of such clauses that would drown the real one."""
+    text = ("Дополнительное соглашение № D990000002-01\nг. Тверь 21.01.2021\n"
+            + "\n".join(f"{i}. Условие номер {i} без дат." for i in range(1, 6)) + f"\n6. {clause}")
+    assert _term_ids(text_doc([text])) == []
+
+
+# --- review fixes (fix/review-p9) ------------------------------------------------------------------------------------
+
+_LONG_OPS = ("Дополнительное соглашение № D990000002-01\nк Договору № D990000001-01 от 21.01.2021\n"
+             "1. Внести в Договор следующие изменения:\n"
+             "1.1. Пункт 3.1 Договора изложить в следующей редакции: «Ставка составляет 700 рублей». "
+             + "слово " * 300 + "\n"
+             "1.2. Пункт 5.2 Договора исключить. " + "слово " * 300 + "\n"
+             "2. Настоящее Соглашение вступает в силу с 01.07.2026.")
+
+
+def test_a_start_a_later_ops_batch_grounds_wins_over_one_the_gate_refused_in_an_earlier_batch():
+    s = load_settings(llm_batch_tokens=500)
+    doc = text_doc([_LONG_OPS])
+    batches = select_clauses(doc, "ops", s, supplement=True)
+    assert len(batches) > 1
+    wrong = {"value": "2026-08-01", "page": 1, "quote": "Соглашение вступает в силу с 01.08.2026"}
+    right = {"value": "2026-07-01", "page": 1, "quote": "Настоящее Соглашение вступает в силу с 01.07.2026"}
+    script = ([json.dumps({"ops": [], "effective_from": wrong}, ensure_ascii=False)]
+              + [json.dumps({"ops": []})] * (len(batches) - 2)
+              + [json.dumps({"ops": [], "effective_from": right}, ensure_ascii=False)])
+    rec = understand_document(doc, parse_header(_LONG_OPS), ScriptedClient(script), s, ["ops"])
+    assert (rec.effective_from.status, rec.effective_from.value) == ("accepted", date(2026, 7, 1))
+
+
+def test_a_start_the_gate_refused_in_the_ops_call_does_not_replace_an_absent_start():
+    """A date the gate refused is no evidence: the document still does not say when it starts, and the fold dates it
+    from its signing (ГК РФ ст. 425, 453)."""
+    wrong = {"value": "2021-05-01", "page": 1, "quote": "вступает в силу с 01.05.2021"}
+    ops = json.dumps({"ops": [], "effective_from": wrong}, ensure_ascii=False)
+    text = CHANGE_LIST.split("\n2. ")[0]  # the change list without the clause that says when it starts
+    client = ScriptedClient([_header_json(kind="supplement"), ops])
+    rec = understand_document(text_doc([text]), parse_header(text), client, load_settings(), ["header", "ops"])
+    assert [c["schema"] for c in client.calls] == ["HeaderOut", "OpsOut"]
+    assert rec.effective_from.status == "absent"
+
+
+def test_a_reread_group_drops_its_old_model_failure_and_issues_are_not_repeated():
+    """Once the ops group answers on a re-read, its old timeout no longer marks the operations unread."""
+    from contract_analyst.agent.steps import _merge_records
+    from contract_analyst.models import Issue
+
+    timeout = Issue(code="llm_timeout", message="ДС.pdf: группа ops — LLM не ответила: timeout")
+    money_failed = Issue(code="llm_truncated", message="ДС.pdf: группа money — ответ оборвался")
+    draft = Issue(code="draft", message="ДС.pdf: похоже на проект, подписание не подтверждено")
+    rec = _understand(text_doc([_NO_START]), [_header_json(kind="supplement")], groups=["header"])
+    old = rec.model_copy(update={"issues": [timeout, money_failed, draft]})
+    new = rec.model_copy(update={"issues": [draft]})
+    assert [i.code for i in _merge_records(old, new, ["ops"]).issues] == ["llm_truncated", "draft"]

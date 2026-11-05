@@ -60,9 +60,9 @@ def _category(chain: ContractChain, records: dict[str, DocumentRecord]) -> str:
     return votes.most_common(1)[0][0] if votes else "other"
 
 
-def _amount(value) -> str:
-    text = format(value.normalize(), "f")
-    return text
+def _amount(rate) -> str:
+    """A rate's amount with its unit, so that 60 % and 60 руб. are not the same value."""
+    return f"{format(rate.amount.normalize(), 'f')} {'%' if rate.unit == '%' else 'руб.'}"
 
 
 def compare_cluster(cluster: Cluster, contracts: dict[str, ConsolidatedContract]) -> list[Difference]:
@@ -82,7 +82,7 @@ def compare_cluster(cluster: Cluster, contracts: dict[str, ConsolidatedContract]
         if len(set(values.values())) > 1:
             diffs.append(Difference(term=name, values=values))
     for label in sorted({r.label for m in members for r in contracts[m].rates}):
-        values = {m: next((_amount(r.amount) for r in contracts[m].rates if r.label == label), NO_DATA) for m in members}
+        values = {m: next((_amount(r) for r in contracts[m].rates if r.label == label), NO_DATA) for m in members}
         if len(set(values.values())) > 1:
             diffs.append(Difference(term=f"rate:{label}", values=values))
     return diffs
@@ -118,7 +118,7 @@ def _cluster_facts(cluster: Cluster, contracts: dict[str, ConsolidatedContract])
             if state.current.status == ValueStatus.ACCEPTED:
                 lines.append(f"  - {name}: {state.current.value}{_ref(state.current.source)}")
         for r in c.rates:
-            lines.append(f"  - ставка «{r.label}»: {_amount(r.amount)} руб.{_ref(r.source)}")
+            lines.append(f"  - ставка «{r.label}»: {_amount(r)}{_ref(r.source)}")
     return "\n".join(lines)
 
 
