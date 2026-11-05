@@ -317,15 +317,23 @@ def _says_from_signing(doc: DocumentText) -> bool:
     return any(_FROM_SIGNING.search(s) and _TERM_VERB.search(s) for s in re.split(r"(?<=[.;])\s+|\n", text))
 
 
-def _wait_for_a_start(acc: _Acc) -> None:
+_START_UNKNOWN = "start_unknown: документ не говорит, с какой даты действует, а дата подписания была бы догадкой"
+
+
+def wait_for_a_start(rates: list, ops: list, start_stated: bool) -> tuple[list, list]:
     """A document that does not say when it starts: its rates and operations without a start of their own are shown
-    but not accepted — the signing date would be a guess. An invalidation is never dated."""
-    reason = "start_unknown: документ не говорит, с какой даты действует, а дата подписания была бы догадкой"
-    acc.rates = [r.model_copy(update={"status": ValueStatus.CONFLICT, "reason": reason})
-                 if r.status == ValueStatus.ACCEPTED and r.valid_from is None else r for r in acc.rates]
-    acc.ops = [o.model_copy(update={"status": ValueStatus.CONFLICT, "reason": reason})
-               if o.status == ValueStatus.ACCEPTED and o.effective_from is None and o.op != OpType.INVALIDATE_DOCUMENT
-               else o for o in acc.ops]
+    but not accepted — the signing date would be a guess. An invalidation is never dated. Once the start is known
+    (a later reading of the header found it), the values held for it are accepted again."""
+    def hold(value, dated: bool):
+        if start_stated:
+            held = value.status == ValueStatus.CONFLICT and (value.reason or "").startswith("start_unknown")
+            return value.model_copy(update={"status": ValueStatus.ACCEPTED, "reason": None}) if held else value
+        if value.status == ValueStatus.ACCEPTED and not dated:
+            return value.model_copy(update={"status": ValueStatus.CONFLICT, "reason": _START_UNKNOWN})
+        return value
+
+    return ([hold(r, r.valid_from is not None) for r in rates],
+            [hold(o, o.effective_from is not None or o.op == OpType.INVALIDATE_DOCUMENT) for o in ops])
 
 
 def understand_document(doc: DocumentText, header: HeaderGuess, client: LLMClient, settings: Settings,
@@ -349,7 +357,7 @@ def understand_document(doc: DocumentText, header: HeaderGuess, client: LLMClien
             values["effective_from"] = _absent("from_signing")
         else:
             values["effective_from"] = _absent("start_not_stated")
-            _wait_for_a_start(acc)
+            acc.rates, acc.ops = wait_for_a_start(acc.rates, acc.ops, start_stated=False)
 
     kind_value = acc.header.kind if acc.header else _REGEX_KIND[header.title_kind]
     if kind_value == DocKind.FRAMEWORK and values["parent_number"].status == ValueStatus.ACCEPTED:

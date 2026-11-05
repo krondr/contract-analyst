@@ -436,3 +436,28 @@ def test_a_start_the_gate_refused_in_the_ops_call_does_not_replace_a_start_not_s
     rec = understand_document(text_doc([text]), parse_header(text), client, load_settings(), ["header", "ops"])
     assert [c["schema"] for c in client.calls] == ["HeaderOut", "OpsOut"]
     assert (rec.effective_from.status, rec.effective_from.reason) == ("absent", "start_not_stated")
+
+
+def _held(rec):
+    return {r.amount: r.status for r in rec.rates}
+
+
+def test_rates_read_after_the_header_wait_for_a_start_the_document_does_not_state():
+    """The agent may read the header first and the money later: the rates still wait for a start."""
+    from contract_analyst.agent.steps import _merge_records
+
+    header = _understand(text_doc([_NO_START]), [_header_json(kind="supplement")], groups=["header"])
+    money = _understand(text_doc([_NO_START]), [_RATES], groups=["money"])
+    assert _held(_merge_records(header, money, ["money"])) == {Decimal(500): "conflict", Decimal(900): "accepted"}
+    assert _held(_merge_records(money, header, ["header"])) == {Decimal(500): "conflict", Decimal(900): "accepted"}
+
+
+def test_rates_held_for_a_start_are_released_when_a_header_reread_finds_one():
+    from contract_analyst.agent.steps import _merge_records
+
+    held = _understand(text_doc([_NO_START]), [_header_json(kind="supplement"), _RATES], groups=["header", "money"])
+    signed = f"{_NO_START}\n4. Настоящее Соглашение вступает в силу со дня его подписания Сторонами."
+    header = _understand(text_doc([signed]), [_header_json(kind="supplement"), _dates_json()], groups=["header"])
+    merged = _merge_records(held, header, ["header"])
+    assert merged.effective_from.reason == "from_signing"
+    assert _held(merged) == {Decimal(500): "accepted", Decimal(900): "accepted"}
