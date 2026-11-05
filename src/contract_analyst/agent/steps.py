@@ -31,7 +31,7 @@ from contract_analyst.ocr import get_ocr_engine
 from contract_analyst.parsing.header import parse_header
 from contract_analyst.report.render import ReportContext, render_report, report_sources
 from contract_analyst.report.verify import verify_claims
-from contract_analyst.understand.understand import prompt_versions, understand_document, wait_for_a_start
+from contract_analyst.understand.understand import prompt_versions, understand_document
 
 DATA_LIMIT = 2000
 
@@ -241,12 +241,7 @@ def _merge_records(old: DocumentRecord, new: DocumentRecord, groups: list[str]) 
     if "ops" in groups:
         update["ops"] = new.ops
     update["issues"] = _merge_issues(old.issues, new.issues, groups)
-    merged = old.model_copy(update=update)
-    # The start and the rows may come from different readings: whether undated rows wait for a start is judged on
-    # the merged record, else rows read after the header (or before it) would skip the check.
-    rates, ops = wait_for_a_start(merged.rates, merged.ops,
-                                  start_stated=merged.effective_from.reason != "start_not_stated")
-    return merged.model_copy(update={"rates": rates, "ops": ops})
+    return old.model_copy(update=update)
 
 
 def _counts(record: DocumentRecord) -> dict:
