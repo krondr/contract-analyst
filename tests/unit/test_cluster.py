@@ -43,7 +43,7 @@ def test_same_category_one_cluster_with_differences():
     assert cluster.facets["D990000002-01"]["counterparty_type"] == "ИП"
     terms = {d.term: d.values for d in compare_cluster(cluster, contracts)}
     assert terms["city"] == {"D990000001-01": "Тверь", "D990000002-01": "Псков"}
-    assert terms["rate:Тариф А"] == {"D990000001-01": "500", "D990000002-01": "700"}
+    assert terms["rate:Тариф А"] == {"D990000001-01": "500 руб.", "D990000002-01": "700 руб."}
 
 
 def test_category_from_main_else_majority_else_other():
@@ -73,3 +73,17 @@ def test_summary_uses_llm_and_keeps_refs():
     text = summarize_cluster(cluster, contracts, ScriptedClient(['{"summary": "Ставка 100000 [doc:a:p1]."}']))
     assert text == "Ставка 100000 [doc:a:p1]."
     assert Decimal(100000) == contracts["D990000001-01"].rates[0].amount
+
+
+def test_a_percent_rate_keeps_its_unit_in_the_summary_facts_and_differs_from_the_same_sum_in_roubles():
+    from contract_analyst.analyze.cluster import _cluster_facts
+
+    a = rec("a", "D990000001-01", kind="main", category="lease", rates=[("Вознаграждение", 60, None, None)])
+    b = rec("b", "D990000002-01", kind="main", category="lease", rates=[("Вознаграждение", 60, None, None)])
+    a = a.model_copy(update={"rates": [a.rates[0].model_copy(update={"unit": "%"})]})
+    chains, by_id, contracts = _setup([a, b])
+    (cluster,) = cluster_contracts(list(contracts.values()), by_id, chains, load_settings())
+    facts = _cluster_facts(cluster, contracts)
+    assert "«Вознаграждение»: 60 %" in facts and "«Вознаграждение»: 60 руб." in facts
+    (diff,) = [d for d in cluster.differences if d.term == "rate:Вознаграждение"]
+    assert diff.values == {"D990000001-01": "60 %", "D990000002-01": "60 руб."}
