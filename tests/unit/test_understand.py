@@ -401,3 +401,38 @@ def test_the_term_call_skips_a_clause_where_something_else_applies(clause):
     text = ("Дополнительное соглашение № D990000002-01\nг. Тверь 21.01.2021\n"
             + "\n".join(f"{i}. Условие номер {i} без дат." for i in range(1, 6)) + f"\n6. {clause}")
     assert _term_ids(text_doc([text])) == []
+
+
+# --- review fixes (fix/review-p9) ------------------------------------------------------------------------------------
+
+_LONG_OPS = ("Дополнительное соглашение № D990000002-01\nк Договору № D990000001-01 от 21.01.2021\n"
+             "1. Внести в Договор следующие изменения:\n"
+             "1.1. Пункт 3.1 Договора изложить в следующей редакции: «Ставка составляет 700 рублей». "
+             + "слово " * 300 + "\n"
+             "1.2. Пункт 5.2 Договора исключить. " + "слово " * 300 + "\n"
+             "2. Настоящее Соглашение вступает в силу с 01.07.2026.")
+
+
+def test_a_start_a_later_ops_batch_grounds_wins_over_one_the_gate_refused_in_an_earlier_batch():
+    s = load_settings(llm_batch_tokens=500)
+    doc = text_doc([_LONG_OPS])
+    batches = select_clauses(doc, "ops", s, supplement=True)
+    assert len(batches) > 1
+    wrong = {"value": "2026-08-01", "page": 1, "quote": "Соглашение вступает в силу с 01.08.2026"}
+    right = {"value": "2026-07-01", "page": 1, "quote": "Настоящее Соглашение вступает в силу с 01.07.2026"}
+    script = ([json.dumps({"ops": [], "effective_from": wrong}, ensure_ascii=False)]
+              + [json.dumps({"ops": []})] * (len(batches) - 2)
+              + [json.dumps({"ops": [], "effective_from": right}, ensure_ascii=False)])
+    rec = understand_document(doc, parse_header(_LONG_OPS), ScriptedClient(script), s, ["ops"])
+    assert (rec.effective_from.status, rec.effective_from.value) == ("accepted", date(2026, 7, 1))
+
+
+def test_a_start_the_gate_refused_in_the_ops_call_does_not_replace_a_start_not_stated():
+    """A date the gate refused is no evidence: the document still does not say when it starts."""
+    wrong = {"value": "2021-05-01", "page": 1, "quote": "вступает в силу с 01.05.2021"}
+    ops = json.dumps({"ops": [], "effective_from": wrong}, ensure_ascii=False)
+    text = CHANGE_LIST.split("\n2. ")[0]  # the change list without the clause that says when it starts
+    client = ScriptedClient([_header_json(kind="supplement"), ops])
+    rec = understand_document(text_doc([text]), parse_header(text), client, load_settings(), ["header", "ops"])
+    assert [c["schema"] for c in client.calls] == ["HeaderOut", "OpsOut"]
+    assert (rec.effective_from.status, rec.effective_from.reason) == ("absent", "start_not_stated")

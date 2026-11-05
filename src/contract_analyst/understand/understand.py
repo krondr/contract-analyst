@@ -262,7 +262,9 @@ def _run_group(acc: _Acc, doc: DocumentText, group: str, client: LLMClient, sett
                 gated = gate_op(op.model_copy(update={"page": page or op.page}), doc, settings)
                 if all((o.op, o.target, o.source) != (gated.op, gated.target, gated.source) for o in acc.ops):
                     acc.ops.append(gated)
-            if out.effective_from.value and acc.ops_effective is None:
+            if out.effective_from.value and (acc.ops_effective is None
+                                             or acc.ops_effective.status != ValueStatus.ACCEPTED):
+                # a later batch may ground the start an earlier one got wrong
                 acc.ops_effective = _gate_value("effective_from", out.effective_from, "date", doc, settings)
     if group == "header":
         _run_term(acc, doc, client, settings)
@@ -337,7 +339,8 @@ def understand_document(doc: DocumentText, header: HeaderGuess, client: LLMClien
 
     regex = _regex_candidates(header, doc, settings) if doc.pages else {}
     values = {f: _merge(regex.get(f), acc.header_values.get(f)) for f in _HEADER_KINDS}
-    if values["effective_from"].status != ValueStatus.ACCEPTED and acc.ops_effective:
+    if (values["effective_from"].status != ValueStatus.ACCEPTED and acc.ops_effective
+            and acc.ops_effective.status == ValueStatus.ACCEPTED):  # a refused date is no evidence of a start
         values["effective_from"] = acc.ops_effective
     start = values["effective_from"]
     if "header" in wanted and start.status == ValueStatus.ABSENT and start.reason != "from_signing":
