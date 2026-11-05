@@ -582,13 +582,13 @@ def test_an_invalidation_keeps_no_date_because_the_fold_never_dates_one():
 # --- wrong values the code can refuse or correct (fix/wrong-values-p4) ---------------------------------------------
 
 _TABLE = text_doc([("Таблица № 2\nНазвание Группы тарифных планов % от суммы оплаченных Клиентом начислений "
-                    "Ставка вознаграждения (руб. без НДС)\nТариф Старт 45% 2000\nТариф Плюс 50% 2400")])
+                    "Ставка вознаграждения (руб. без НДС)\nТариф Старт 40% 1800\nТариф Плюс 55% 2600")])
 
 
 def test_a_percentage_has_no_vat_even_under_a_vat_header():
     s = load_settings()
-    percent = gate_rate(RateOut(label="Тариф Старт, %", amount="45%", vat="excluded", page=1, quote="Тариф Старт 45% 2000"), _TABLE, s)
-    rubles = gate_rate(RateOut(label="Тариф Старт, ставка", amount="2000", vat="excluded", page=1, quote="Тариф Старт 45% 2000"),
+    percent = gate_rate(RateOut(label="Тариф Старт, %", amount="40%", vat="excluded", page=1, quote="Тариф Старт 40% 1800"), _TABLE, s)
+    rubles = gate_rate(RateOut(label="Тариф Старт, ставка", amount="1800", vat="excluded", page=1, quote="Тариф Старт 40% 1800"),
                        _TABLE, s)
     assert (percent.status, percent.unit, percent.vat) == ("accepted", "%", "unknown")
     assert (rubles.status, rubles.unit, rubles.vat) == ("accepted", "RUB", "excluded")
@@ -631,12 +631,12 @@ def test_a_date_right_after_a_masked_representative_is_refused_from_the_page_tex
 
 
 def test_a_rate_whose_percent_sign_stands_only_in_the_column_header_is_a_percentage():
-    """«% от суммы оплаченных Клиентом начислений» heads the column; the row reads «Тариф Старт / 45 / 2000» and the model's label
+    """«% от суммы оплаченных Клиентом начислений» heads the column; the row reads «Тариф Старт / 40 / 1800» and the model's label
     says it is a percentage."""
     table = text_doc([("Таблица № 2\nНазвание Группы тарифных планов\n% от суммы оплаченных Клиентом начислений\n"
-                       "Ставка вознаграждения (руб. без НДС)\nТариф Старт\n45\n2000")])
-    row = gate_rate(RateOut(label="Тариф Старт — процент от суммы оплаченных Клиентом начислений", amount="45",
-                            vat="excluded", page=1, quote="Тариф Старт\n45\n2000"), table, load_settings())
+                       "Ставка вознаграждения (руб. без НДС)\nТариф Старт\n40\n1800")])
+    row = gate_rate(RateOut(label="Тариф Старт — процент от суммы оплаченных Клиентом начислений", amount="40",
+                            vat="excluded", page=1, quote="Тариф Старт\n40\n1800"), table, load_settings())
     assert (row.status, row.unit, row.vat) == ("accepted", "%", "unknown")
 
 
@@ -717,8 +717,8 @@ def test_vat_in_a_table_header_far_above_the_row_applies_to_it():
 
 
 def test_vat_is_found_when_the_cells_of_a_row_stand_on_separate_lines():
-    text = "Таблица №1\nСтавка вознаграждения (руб.\nбез НДС)\nТариф Старт\n270\n500\nТариф Макс\n675\n1200"
-    assert _row(text, "Тариф Макс", "1200", "Тариф Макс 675 1200").vat == "excluded"
+    text = "Таблица №1\nСтавка вознаграждения (руб.\nбез НДС)\nТариф Старт\n280\n510\nТариф Макс\n690\n1250"
+    assert _row(text, "Тариф Макс", "1250", "Тариф Макс 690 1250").vat == "excluded"
 
 
 def test_vat_of_one_table_does_not_pass_to_the_next():
