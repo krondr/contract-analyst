@@ -1,7 +1,8 @@
 """Clean evaluation sets: the build is reproducible, golden answers agree with the built files, all of it fictional.
 
 Only the golden sets themselves are checked here. The code fold is not compared with them (fold_mismatches) and the
-agent is not run on them: each set measures a result once (clean/README.md, clean2/README.md)."""
+agent is not run on them: each set measures a result once (clean/README.md, clean2/README.md,
+clean3/README.md)."""
 
 import hashlib
 import importlib
@@ -22,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 needs_tesseract = pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract binary missing")
 
 # (set directory, build script module, prefix of every document number in the set)
-SETS = [("clean", "make_clean", "D97"), ("clean2", "make_clean2", "D96")]
+SETS = [("clean", "make_clean", "D97"), ("clean2", "make_clean2", "D96"), ("clean3", "make_clean3", "D95")]
 by_set = pytest.mark.parametrize(("name", "script", "prefix"), SETS, ids=[s[0] for s in SETS])
 
 

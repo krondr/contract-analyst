@@ -1,0 +1,443 @@
+# Third clean golden set (docs/golden_guide.md). Built by scripts/make_clean3.py from clean3/sources.
+# Written without reading the system's code, rules, prompts, configuration, unit tests or the texts of the other sets.
+# Values are what a careful lawyer reads in each document (Civil Code of the Russian Federation, usual contract
+# practice).
+#
+# Annotation decisions (for adjudication):
+# - Counterparty: the party that performs under the contract (Исполнитель, Арендодатель, Агент); the other party is
+#   the customer of the set.
+# - Start of a document (effective_from):
+#   * a date stated for the whole document («начинает действовать с 01.04.2025», «вводятся в действие с 1 сентября
+#     2026 г.») -> that date;
+#   * start at signing, in any wording («вступает в действие в дату его подписания», «с даты, указанной в его
+#     заголовке», «с даты его заключения», «после его подписания обеими Сторонами», «начинает действовать со дня
+#     подписания», «немедленно после подписания») -> the document's own date; the quote is the dated header line;
+#   * a clause saying from which date some changes apply («применяется к Испытаниям образцов, поступивших … с …»,
+#     «применяется к выездам, выполненным с …», «подлежат применению с …») does not move the document's start: it
+#     dates those changes only (rates' valid_from, ops' effective_from) and is not an operation of its own;
+#   * the entry-into-force clause inside a contract text restated by a supplement («Договор вступает в силу с даты его
+#     заключения …» in D952000002-01) belongs to the restated contract, not to the supplement;
+#   * a document that says nothing about its start -> effective_from absent; its operations get no effective_from
+#     either, and in the chains its changes apply on both as_of dates, which are after signing.
+# - effective_to of a main contract: the end date it states; «до полного исполнения Сторонами своих обязательств» is
+#   no date -> absent. A supplement that extends the contract does not get the new end as its own effective_to: the
+#   new end is the chain's validity.
+# - VAT: a table header applies to every row of its table; a clause «Все суммы, указанные в Договоре, включают налог на
+#   добавленную стоимость» applies to every sum of that contract text. «НДС не включён» -> excluded; «с учётом НДС»,
+#   «в том числе налог на добавленную стоимость» -> included. The VAT amount inside a price («в том числе налог на
+#   добавленную стоимость 600 (шестьсот) рублей») is not a rate. Fees that say nothing about VAT -> unknown.
+# - Not rates: a surcharge in percent of a price («увеличивается на 50 %»), a security deposit, a refund of
+#   electricity at the supplier's tariff (no amount), fines and penalties.
+# - Appendix 1 restated by a supplement -> replace_appendix «Приложение 1»; the whole contract restated ->
+#   restate_document with no target. Rates of the restated text are the supplement's rates; a rate the new wording
+#   drops (the sticker fee) no longer applies from the restatement's start.
+# - «Пункт X Договора исключить» -> delete_clause X. A deleted fine is gone from the chain's penalties; the deleting
+#   document itself has no penalties term.
+# - A reference «№ D952000001-01 от 1 сентября 2025 г. (в редакции дополнительного соглашения № D952000002-01 …)» has
+#   the contract as its parent.
+# - Termination «прекращают действие … с X», X before both as_of dates: status terminated on both; terms_at {} and
+#   rates_at [] on both.
+# - A supplement changes only the clauses it names; the chain's term holds the merged wording.
+# - Scan quotes are copied from the OCR text (the Latin D of the numbers reads as the digit 0); values are canonical.
+# - Rates of a document carry no valid_to of their own; chains carry valid_to where a later signed document ends them.
+version: 1
+as_of_dates: [2026-10-30, 2027-02-01]
+
+documents:
+  # ---------------------------------------------------------------- chain 1: laboratory testing D951000001-01
+  # Signed 2025-03-17; clause 6.1 puts the start on 2025-04-01. Appendix 1 (the price list) is on page 3.
+  - file: "lab/Рамочный договор испытания.pdf"
+    doc_id: "287105850012"
+    kind: main
+    is_draft: false
+    number: {value: "D951000001-01", page: 1, quote: "РАМОЧНЫЙ ДОГОВОР № D951000001-01 на проведение лабораторных испытаний строительных материалов"}
+    doc_date: {value: "2025-03-17", page: 1, quote: "Самара, «17» марта 2025 г."}
+    city: {value: "Самара", page: 1, quote: "Самара, «17» марта 2025 г."}
+    parent_number: {value: null, status: absent}
+    parent_date: {value: null, status: absent}
+    effective_from: {value: "2025-04-01", page: 2, quote: "6.1. Договор начинает действовать с 01.04.2025 и действует по 31.12.2026 включительно."}
+    effective_to: {value: "2026-12-31", page: 2, quote: "6.1. Договор начинает действовать с 01.04.2025 и действует по 31.12.2026 включительно."}
+    subject_category: services
+    counterparty_type: {value: "ООО", page: 1, quote: "Общество с ограниченной ответственностью «Волгастройлаб» (далее — Исполнитель)"}
+    terms:
+      subject: {value: "испытания образцов бетона, строительного раствора и арматурного проката в испытательной лаборатории Исполнителя по заявкам Заказчика с выдачей протоколов испытаний", page: 1, quote: "1.1. Исполнитель по заявкам Заказчика проводит в своей испытательной лаборатории испытания образцов бетона, строительного раствора и арматурного проката"}
+      validity: {value: "с 01.04.2025 по 31.12.2026 включительно", page: 2, quote: "6.1. Договор начинает действовать с 01.04.2025 и действует по 31.12.2026 включительно."}
+      payment_terms: {value: "оплата по счёту, выставленному по итогам месяца, в течение 15 календарных дней с даты его получения; акт сдачи-приёмки Испытаний за прошедший месяц — до 5-го числа", page: 2, quote: "3.2. Оплата производится на основании счёта, выставленного по итогам месяца, в течение 15 (пятнадцати) календарных дней с даты его получения."}
+      termination: {value: "Заказчик вправе отказаться от Договора в любое время, оплатив начатые Испытания; Исполнитель — письменно уведомив Заказчика не менее чем за 60 календарных дней", page: 2, quote: "Исполнитель вправе отказаться от Договора, письменно уведомив Заказчика не менее чем за 60 (шестьдесят) календарных дней."}
+      notification_channel: {value: "протоколы, акты и счета размещаются в личном кабинете Заказчика и считаются полученными в день размещения; оригиналы актов — курьером по требованию Заказчика", page: 2, quote: "5.1. Протоколы испытаний, акты и счета Исполнитель размещает в личном кабинете Заказчика; документ считается полученным в день размещения."}
+      penalties: {value: "пени Исполнителя 0,5% от цены Испытания за каждый рабочий день просрочки выдачи протокола, не более 10% цены Испытания; пени Заказчика 1/300 ключевой ставки Банка России от неоплаченной суммы за каждый день просрочки оплаты", page: 2, quote: "4.2. За нарушение срока оплаты Заказчик уплачивает пени в размере одной трёхсотой ключевой ставки Банка России от неоплаченной суммы за каждый день просрочки."}
+    rates:
+      # VAT only in the table header: «Цена, руб. (НДС не включён)».
+      - {label: "Прочность бетона на сжатие (образцы-кубы), серия из 3 образцов", amount: "2400.00", vat: excluded, valid_from: 2025-04-01, page: 3, quote: "Прочность бетона на сжатие (образцы-кубы) | серия из 3 образцов | 2 400,00"}
+      - {label: "Морозостойкость бетона, 1 марка", amount: "18600.00", vat: excluded, valid_from: 2025-04-01, page: 3, quote: "Морозостойкость бетона | 1 марка | 18 600,00"}
+      - {label: "Водонепроницаемость бетона, 1 марка", amount: "9750.00", vat: excluded, valid_from: 2025-04-01, page: 3, quote: "Водонепроницаемость бетона | 1 марка | 9 750,00"}
+      - {label: "Растяжение арматурного проката, 1 образец", amount: "1150.00", vat: excluded, valid_from: 2025-04-01, page: 3, quote: "Растяжение арматурного проката | 1 образец | 1 150,00"}
+      # 600 is the VAT inside the price, not a rate; the 50 % urgent surcharge (clause 3.5) is not a rate either.
+      - {label: "Выезд специалиста для отбора проб в пределах Самары, за выезд", amount: "3600", vat: included, valid_from: 2025-04-01, page: 2, quote: "оплачивается в размере 3 600 (трёх тысяч шестисот) рублей за выезд, в том числе налог на добавленную стоимость 600 (шестьсот) рублей."}
+    ops: []
+
+  # Clause 4: in force on signing; clause 3: the new price list applies to samples received from 2026-01-12.
+  - file: "lab/ДС 2 прейскурант.docx"
+    doc_id: "34d710c94552"
+    kind: supplement
+    is_draft: false
+    number: {value: "D951000002-01", page: 1, quote: "ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № D951000002-01 к рамочному договору № D951000001-01 от 17 марта 2025 г."}
+    doc_date: {value: "2025-12-02", page: 1, quote: "г. Самара, 2 декабря 2025 г."}
+    city: {value: "Самара", page: 1, quote: "г. Самара, 2 декабря 2025 г."}
+    parent_number: {value: "D951000001-01", page: 1, quote: "к рамочному договору № D951000001-01 от 17 марта 2025 г."}
+    parent_date: {value: "2025-03-17", page: 1, quote: "к рамочному договору № D951000001-01 от 17 марта 2025 г."}
+    effective_from: {value: "2025-12-02", page: 1, quote: "г. Самара, 2 декабря 2025 г."}
+    effective_to: {value: null, status: absent}
+    subject_category: services
+    counterparty_type: {value: "ООО", page: 1, quote: "ООО «Волгастройлаб» (Исполнитель) в лице директора Старостина Глеба Аркадьевича"}
+    terms:
+      payment_terms: {value: "оплата по счёту, выставленному по итогам месяца, в течение 10 рабочих дней с даты его получения", page: 1, quote: "«3.2. Оплата производится на основании счёта, выставленного по итогам месяца, в течение 10 (десяти) рабочих дней с даты его получения.»"}
+    rates:
+      # VAT only in the table header: «Цена, руб., с учётом НДС».
+      - {label: "Прочность бетона на сжатие (образцы-кубы), серия из 3 образцов", amount: "2976.00", vat: included, valid_from: 2026-01-12, page: 1, quote: "Прочность бетона на сжатие (образцы-кубы) | серия из 3 образцов | 2 976,00"}
+      - {label: "Морозостойкость бетона, 1 марка", amount: "22692.00", vat: included, valid_from: 2026-01-12, page: 1, quote: "Морозостойкость бетона | 1 марка | 22 692,00"}
+      - {label: "Водонепроницаемость бетона, 1 марка", amount: "11895.40", vat: included, valid_from: 2026-01-12, page: 1, quote: "Водонепроницаемость бетона | 1 марка | 11 895,40"}
+      - {label: "Растяжение арматурного проката, 1 образец", amount: "1403.00", vat: included, valid_from: 2026-01-12, page: 1, quote: "Растяжение арматурного проката | 1 образец | 1 403,00"}
+      - {label: "Изгиб арматурного проката, 1 образец", amount: "1219.60", vat: included, valid_from: 2026-01-12, page: 1, quote: "Изгиб арматурного проката | 1 образец | 1 219,60»"}
+    ops:
+      - {op: replace_appendix, target: "Приложение 1", effective_from: 2026-01-12, page: 1, quote: "1. Приложение № 1 к Договору (Прейскурант) изложить в редакции приложения к настоящему соглашению."}
+      - {op: replace_clause, target: "3.2", effective_from: 2025-12-02, page: 1, quote: "2. Пункт 3.2 Договора изложить в следующей редакции:"}
+
+  # The header gives no parent; the preamble names the contract. Says nothing about its start.
+  - file: "lab/Доп соглашение (продление).pdf"
+    doc_id: "9b79b92d31ea"
+    kind: supplement
+    is_draft: false
+    number: {value: "D951000003-01", page: 1, quote: "Дополнительное соглашение № D951000003-01 Самара, 19 июня 2026 года"}
+    doc_date: {value: "2026-06-19", page: 1, quote: "Самара, 19 июня 2026 года"}
+    city: {value: "Самара", page: 1, quote: "Самара, 19 июня 2026 года"}
+    parent_number: {value: "D951000001-01", page: 1, quote: "сторонами рамочного договора на проведение лабораторных испытаний строительных материалов от 17.03.2025 № D951000001-01 (далее — Договор)"}
+    parent_date: {value: "2025-03-17", page: 1, quote: "сторонами рамочного договора на проведение лабораторных испытаний строительных материалов от 17.03.2025 № D951000001-01 (далее — Договор)"}
+    effective_from: {value: null, status: absent}
+    effective_to: {value: null, status: absent}
+    subject_category: services
+    counterparty_type: {value: "ООО", page: 1, quote: "ООО «Волгастройлаб» (Исполнитель) в лице директора Старостина Глеба Аркадьевича"}
+    terms:
+      validity: {value: "с 01.04.2025 по 31.12.2027 включительно", page: 1, quote: "«6.1. Договор начинает действовать с 01.04.2025 и действует по 31.12.2027 включительно.»"}
+    rates: []
+    ops:
+      - {op: replace_clause, target: "6.1", effective_from: null, page: 1, quote: "1. Пункт 6.1 Договора изложить в следующей редакции:"}
+      # Clause 3.5 holds the 50 % urgent surcharge, which is no rate: nothing leaves the rates.
+      - {op: delete_clause, target: "3.5", effective_from: null, page: 1, quote: "2. Пункт 3.5 Договора исключить."}
+
+  # Scan. Clause 3: in force on the date in its header; clause 2: the new visit price from 2027-01-01.
+  - file: "lab/Скан_20261021.pdf"
+    doc_id: "7d537a6f5052"
+    kind: supplement
+    is_draft: false
+    number: {value: "D951000004-01", page: 1, quote: "ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № 0951000004-01 к рамочному договору"}
+    doc_date: {value: "2026-10-20", page: 1, quote: "г. Самара, 20 октября 2026 г."}
+    city: {value: "Самара", page: 1, quote: "г. Самара, 20 октября 2026 г."}
+    parent_number: {value: "D951000001-01", page: 1, quote: "к рамочному договору № 0951000001-01 от 17.03.2025"}
+    parent_date: {value: "2025-03-17", page: 1, quote: "к рамочному договору № 0951000001-01 от 17.03.2025"}
+    effective_from: {value: "2026-10-20", page: 1, quote: "г. Самара, 20 октября 2026 г."}
+    effective_to: {value: null, status: absent}
+    subject_category: services
+    counterparty_type: {value: "ООО", page: 1, quote: "ООО «Волгастройлаб» (Исполнитель) в лице директора Старостина Глеба Аркадьевича"}
+    terms: {}
+    rates:
+      - {label: "Выезд специалиста для отбора проб в пределах Самары, за выезд", amount: "4270", vat: included, valid_from: 2027-01-01, page: 1, quote: "оплачивается в размере 4 270 (четырёх тысяч двухсот семидесяти) рублей за выезд, в том числе налог на добавленную стоимость."}
+    ops:
+      - {op: replace_clause, target: "3.4", effective_from: 2027-01-01, page: 1, quote: "1. Пункт 3.4 Договора изложить в редакции:"}
+
+  # ---------------------------------------------------------------- chain 2: lease of places for vending machines D952000001-01
+  - file: "vending/D952000001-01 аренда мест.docx"
+    doc_id: "688c6ea1beea"
+    kind: main
+    is_draft: false
+    number: {value: "D952000001-01", page: 1, quote: "ДОГОВОР № D952000001-01 аренды мест для размещения торговых автоматов"}
+    doc_date: {value: "2025-09-01", page: 1, quote: "г. Ярославль, 1 сентября 2025 г."}
+    city: {value: "Ярославль", page: 1, quote: "г. Ярославль, 1 сентября 2025 г."}
+    parent_number: {value: null, status: absent}
+    parent_date: {value: null, status: absent}
+    # Clause 6.1: «вступает в силу с даты его заключения».
+    effective_from: {value: "2025-09-01", page: 1, quote: "г. Ярославль, 1 сентября 2025 г."}
+    effective_to: {value: "2026-08-31", page: 1, quote: "6.1. Договор вступает в силу с даты его заключения и действует по 31 августа 2026 г."}
+    subject_category: lease
+    counterparty_type: {value: "АО", page: 1, quote: "Акционерное общество «Которосль-Офис», именуемое в дальнейшем «Арендодатель»"}
+    terms:
+      subject: {value: "временное пользование 3 мест площадью 1 кв. м каждое в здании делового центра (г. Ярославль, ул. Свободы, д. 52) для установки торговых автоматов Арендатора: 1-й этаж у главного входа, холлы у лифтов на 3-м и 5-м этажах", page: 1, quote: "1.1. Арендодатель предоставляет Арендатору во временное пользование 3 (три) места площадью 1 кв. м каждое (далее — Места)"}
+      validity: {value: "с даты заключения по 31 августа 2026 г.", page: 1, quote: "6.1. Договор вступает в силу с даты его заключения и действует по 31 августа 2026 г."}
+      payment_terms: {value: "арендная плата и платежи за подключение к сети и наклейки — авансом до 5-го числа оплачиваемого месяца без выставления счёта; электроэнергия — в течение 10 рабочих дней с даты получения счёта Арендодателя", page: 1, quote: "3.1. Арендная плата и платежи по пунктам 2.3 и 2.4 вносятся авансом до 5-го числа оплачиваемого месяца без выставления счёта."}
+      termination: {value: "каждая из Сторон вправе отказаться от Договора, уведомив другую Сторону за 2 месяца", page: 1, quote: "6.2. Каждая из Сторон вправе отказаться от Договора, уведомив другую Сторону за 2 (два) месяца."}
+      notification_channel: {value: "по электронной почте: Арендодателю — arenda@kotorosl-office.example, Арендатору — info@avtomaty-vv.example; требования об уплате неустойки дополнительно почтовым отправлением", page: 1, quote: "5.1. Уведомления по Договору направляются по электронной почте: Арендодателю — arenda@kotorosl-office.example, Арендатору — info@avtomaty-vv.example."}
+      penalties: {value: "неустойка 0,1% от просроченной суммы за каждый день просрочки любого платежа; штраф 10 000 рублей за каждый случай установки Автомата вне согласованного Места", page: 1, quote: "4.2. За установку Автомата вне согласованного Места Арендатор уплачивает штраф 10 000 (десять тысяч) рублей за каждый случай."}
+    rates:
+      # Clause 2.1: «Все суммы, указанные в Договоре, включают налог на добавленную стоимость». The deposit (2.6) and the
+      # electricity refund (2.5) are not rates.
+      - {label: "Аренда одного Места в месяц", amount: "6500", vat: included, valid_from: 2025-09-01, page: 1, quote: "2.2. Арендная плата за одно Место составляет 6 500 (шесть тысяч пятьсот) рублей в месяц."}
+      - {label: "Подключение Автомата к беспроводной сети, в месяц за Автомат", amount: "900", vat: included, valid_from: 2025-09-01, page: 1, quote: "оплачивается в размере 900 (девятьсот) рублей в месяц за каждый Автомат."}
+      - {label: "Размещение рекламной наклейки на двери лифтового холла, в месяц за наклейку", amount: "1200", vat: included, valid_from: 2025-09-01, page: 1, quote: "оплачивается в размере 1 200 (одна тысяча двести) рублей в месяц за одну наклейку."}
+    ops: []
+
+  # The whole contract in a new wording. Clause 3: in force from 2026-09-01; the restated clause 6.1 («вступает в силу с
+  # даты его заключения») is the contract's, not this agreement's.
+  - file: "vending/новая редакция.pdf"
+    doc_id: "a70f26bfe49a"
+    kind: supplement
+    is_draft: false
+    number: {value: "D952000002-01", page: 1, quote: "ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № D952000002-01 о новой редакции договора аренды мест для размещения торговых автоматов"}
+    doc_date: {value: "2026-07-28", page: 1, quote: "г. Ярославль, 28 июля 2026 г."}
+    city: {value: "Ярославль", page: 1, quote: "г. Ярославль, 28 июля 2026 г."}
+    parent_number: {value: "D952000001-01", page: 1, quote: "заключили настоящее соглашение к договору № D952000001-01 от 01.09.2025 (далее — Договор)."}
+    parent_date: {value: "2025-09-01", page: 1, quote: "заключили настоящее соглашение к договору № D952000001-01 от 01.09.2025 (далее — Договор)."}
+    effective_from: {value: "2026-09-01", page: 2, quote: "3. Настоящее соглашение и Договор в новой редакции вводятся в действие с 1 сентября 2026 г."}
+    effective_to: {value: null, status: absent}
+    subject_category: lease
+    counterparty_type: {value: "АО", page: 1, quote: "АО «Которосль-Офис» (Арендодатель) в лице генерального директора Тимофеева Арсения Львовича"}
+    terms:
+      subject: {value: "временное пользование 4 мест площадью 1 кв. м каждое в здании делового центра (г. Ярославль, ул. Свободы, д. 52) для установки торговых автоматов Арендатора: 1-й этаж у главного входа, 2-й этаж у входа в столовую, холлы у лифтов на 3-м и 5-м этажах", page: 1, quote: "1.1. Арендодатель предоставляет Арендатору во временное пользование 4 (четыре) места площадью 1 кв. м каждое (далее — Места)"}
+      validity: {value: "с даты заключения по 31 августа 2027 г.", page: 2, quote: "6.1. Договор вступает в силу с даты его заключения и действует по 31 августа 2027 г."}
+      payment_terms: {value: "арендная плата и платёж за подключение к сети — авансом до 5-го числа оплачиваемого месяца без выставления счёта; электроэнергия — в течение 10 рабочих дней с даты получения счёта Арендодателя", page: 1, quote: "3.1. Арендная плата и платёж по пункту 2.3 вносятся авансом до 5-го числа оплачиваемого месяца без выставления счёта."}
+      termination: {value: "каждая из Сторон вправе отказаться от Договора, уведомив другую Сторону за 2 месяца", page: 2, quote: "6.2. Каждая из Сторон вправе отказаться от Договора, уведомив другую Сторону за 2 (два) месяца."}
+      notification_channel: {value: "по электронной почте: Арендодателю — arenda@kotorosl-office.example, Арендатору — info@avtomaty-vv.example; требования об уплате неустойки дополнительно почтовым отправлением", page: 2, quote: "5.1. Уведомления по Договору направляются по электронной почте: Арендодателю — arenda@kotorosl-office.example, Арендатору — info@avtomaty-vv.example."}
+      penalties: {value: "неустойка 0,1% от просроченной суммы за каждый день просрочки любого платежа; штраф 10 000 рублей за каждый случай установки Автомата вне согласованного Места", page: 2, quote: "4.2. За установку Автомата вне согласованного Места Арендатор уплачивает штраф 10 000"}
+    rates:
+      # Clause 2.1 of the restated text: all sums include VAT. The sticker fee is not in the new wording.
+      - {label: "Аренда одного Места в месяц", amount: "7150", vat: included, valid_from: 2026-09-01, page: 1, quote: "2.2. Арендная плата за одно Место составляет 7 150 (семь тысяч сто пятьдесят) рублей в месяц."}
+      - {label: "Подключение Автомата к беспроводной сети, в месяц за Автомат", amount: "980", vat: included, valid_from: 2026-09-01, page: 1, quote: "оплачивается в размере 980 (девятьсот восемьдесят) рублей в месяц за каждый Автомат."}
+    ops:
+      # Clause 2 (the old wording until 2026-09-01) and clause 3 (entry into force) are not ops.
+      - {op: restate_document, target: null, effective_from: 2026-09-01, page: 1, quote: "1. Изложить Договор в новой редакции:"}
+
+  # The parent reference names the contract «в редакции» D952000002-01; the parent is the contract. Says nothing about
+  # its start.
+  - file: "vending/Документ1.pdf"
+    doc_id: "ef856bfa8f07"
+    kind: supplement
+    is_draft: false
+    number: {value: "D952000003-01", page: 1, quote: "Дополнительное соглашение № D952000003-01 к договору аренды мест для размещения торговых автоматов"}
+    doc_date: {value: "2026-10-05", page: 1, quote: "Ярославль, 05.10.2026"}
+    city: {value: "Ярославль", page: 1, quote: "Ярославль, 05.10.2026"}
+    parent_number: {value: "D952000001-01", page: 1, quote: "к договору аренды мест для размещения торговых автоматов № D952000001-01 от 1 сентября 2025 г."}
+    parent_date: {value: "2025-09-01", page: 1, quote: "к договору аренды мест для размещения торговых автоматов № D952000001-01 от 1 сентября 2025 г."}
+    effective_from: {value: null, status: absent}
+    effective_to: {value: null, status: absent}
+    subject_category: lease
+    counterparty_type: {value: "АО", page: 1, quote: "АО «Которосль-Офис» (Арендодатель) в лице генерального директора Тимофеева Арсения Львовича"}
+    terms:
+      payment_terms: {value: "арендная плата и платёж за подключение к сети — ежеквартально авансом до 10-го числа первого месяца квартала на основании счёта Арендодателя", page: 1, quote: "«3.1. Арендная плата и платёж по пункту 2.3 вносятся ежеквартально авансом до 10-го числа первого месяца квартала на основании счёта Арендодателя.»"}
+    rates: []
+    ops:
+      - {op: delete_clause, target: "4.2", effective_from: null, page: 1, quote: "1. Пункт 4.2 Договора исключить."}
+      - {op: replace_clause, target: "3.1", effective_from: null, page: 1, quote: "2. Пункт 3.1 Договора изложить в следующей редакции:"}
+
+  # ---------------------------------------------------------------- chain 3: agency for camp vouchers D953000001-01
+  - file: "camp/агентский договор Кочергина.pdf"
+    doc_id: "b93a28e3901a"
+    kind: main
+    is_draft: false
+    number: {value: "D953000001-01", page: 1, quote: "АГЕНТСКИЙ ДОГОВОР № D953000001-01 г. Калининград, «10» ноября 2025 г."}
+    doc_date: {value: "2025-11-10", page: 1, quote: "г. Калининград, «10» ноября 2025 г."}
+    city: {value: "Калининград", page: 1, quote: "г. Калининград, «10» ноября 2025 г."}
+    parent_number: {value: null, status: absent}
+    parent_date: {value: null, status: absent}
+    # Clause 7.1: «вступает в силу после его подписания обеими Сторонами».
+    effective_from: {value: "2025-11-10", page: 1, quote: "г. Калининград, «10» ноября 2025 г."}
+    # «до полного исполнения Сторонами своих обязательств»: no end date.
+    effective_to: {value: null, status: absent}
+    subject_category: commercial_representation
+    counterparty_type: {value: "ИП", page: 1, quote: "индивидуальный предприниматель Кочергина Дарья Сергеевна (далее — Агент)"}
+    terms:
+      subject: {value: "Агент от имени и за счёт Принципала реализует физическим лицам путёвки в детский загородный лагерь «Балтийская дюна» (Калининградская область, Зеленоградский район, пос. Лесной) по ценам Принципала; Принципал выплачивает Агенту вознаграждение", page: 1, quote: "1.1. Агент от имени и за счёт Принципала реализует физическим лицам путёвки в детский загородный лагерь «Балтийская дюна»"}
+      validity: {value: "со дня подписания обеими Сторонами до полного исполнения Сторонами своих обязательств", page: 2, quote: "7.1. Договор вступает в силу после его подписания обеими Сторонами и действует до полного исполнения Сторонами своих обязательств."}
+      payment_terms: {value: "отчёт агента — до 3-го числа за прошедший месяц; Принципал утверждает отчёт или возражает в течение 5 рабочих дней, без возражений отчёт считается утверждённым; вознаграждение — в течение 7 банковских дней после утверждения отчёта; за возвращённые Путёвки не выплачивается, выплаченное удерживается из ближайшего платежа", page: 1, quote: "3.2. Вознаграждение выплачивается в течение 7 (семи) банковских дней после утверждения Принципалом отчёта агента."}
+      termination: {value: "каждая из Сторон вправе отказаться от Договора, письменно уведомив другую Сторону не позднее чем за 1 месяц до предполагаемой даты прекращения", page: 2, quote: "7.2. Каждая из Сторон вправе отказаться от Договора, письменно уведомив другую Сторону не позднее чем за 1 (один) месяц до предполагаемой даты прекращения."}
+      notification_channel: {value: "отчёты агента, возражения и счета — через оператора электронного документооборота; уведомление об отказе от Договора — заказным письмом с описью вложения", page: 2, quote: "6.1. Отчёты агента, возражения и счета Стороны передают через оператора электронного документооборота"}
+      penalties: {value: "штраф Агента 5 000 рублей за каждый подтверждённый случай сообщения покупателям недостоверных сведений о программе смен; пени Принципала 0,05% от невыплаченной суммы за каждый день просрочки выплаты вознаграждения", page: 2, quote: "уплачивает штраф 5 000 (пять тысяч) рублей за каждый подтверждённый случай."}
+      trade_points: {value: "г. Калининград, Ленинский проспект, д. 30, офис 214; стойка в торговом центре «Европа», г. Калининград, ул. Театральная, д. 18, 2-й этаж", page: 1, quote: "2.3. Агент продаёт Путёвки в своём офисе по адресу: г. Калининград, Ленинский проспект, д. 30, офис 214"}
+    rates:
+      # Nothing is said about VAT.
+      - {label: "Вознаграждение Агента за Путёвку, смена 21 день", amount: "1350", vat: unknown, valid_from: 2025-11-10, page: 1, quote: "Смена 21 день | 1 350"}
+      - {label: "Вознаграждение Агента за Путёвку, смена 14 дней", amount: "900", vat: unknown, valid_from: 2025-11-10, page: 1, quote: "Смена 14 дней | 900"}
+    ops: []
+
+  # Clause 5: in force from signing; clause 4: clauses 1–3 apply from 2026-03-16.
+  - file: "camp/ДС вознаграждение 2026.docx"
+    doc_id: "aba684becfb8"
+    kind: supplement
+    is_draft: false
+    number: {value: "D953000002-01", page: 1, quote: "ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № D953000002-01 к агентскому договору"}
+    doc_date: {value: "2026-03-02", page: 1, quote: "г. Калининград, «02» марта 2026 г."}
+    city: {value: "Калининград", page: 1, quote: "г. Калининград, «02» марта 2026 г."}
+    parent_number: {value: "D953000001-01", page: 1, quote: "к агентскому договору от «10» ноября 2025 г. № D953000001-01"}
+    parent_date: {value: "2025-11-10", page: 1, quote: "к агентскому договору от «10» ноября 2025 г. № D953000001-01"}
+    effective_from: {value: "2026-03-02", page: 1, quote: "г. Калининград, «02» марта 2026 г."}
+    effective_to: {value: null, status: absent}
+    subject_category: commercial_representation
+    counterparty_type: {value: "ИП", page: 1, quote: "индивидуальный предприниматель Кочергина Дарья Сергеевна (Агент)"}
+    terms:
+      payment_terms: {value: "вознаграждение — в течение 5 банковских дней после утверждения Принципалом отчёта агента; Принципал утверждает отчёт или возражает в течение 5 рабочих дней, без возражений отчёт считается утверждённым", page: 1, quote: "«3.2. Вознаграждение выплачивается в течение 5 (пяти) банковских дней после утверждения Принципалом отчёта агента."}
+      notification_channel: {value: "дополнительно: о переносе смены или отмене заезда Принципал сообщает Агенту не позднее следующего рабочего дня, дублируя сообщение SMS-сообщением на номер телефона Агента из реквизитов", page: 1, quote: "«6.2. О переносе смены или отмене заезда Принципал сообщает Агенту не позднее следующего рабочего дня, дублируя сообщение SMS-сообщением"}
+    rates:
+      - {label: "Вознаграждение Агента за Путёвку, смена 21 день", amount: "1485.50", vat: unknown, valid_from: 2026-03-16, page: 1, quote: "Смена 21 день | 1 485,50"}
+      - {label: "Вознаграждение Агента за Путёвку, смена 14 дней", amount: "990.00", vat: unknown, valid_from: 2026-03-16, page: 1, quote: "Смена 14 дней | 990,00"}
+      - {label: "Вознаграждение Агента за Путёвку, смена 7 дней «Выходные у моря»", amount: "520.00", vat: unknown, valid_from: 2026-03-16, page: 1, quote: "Смена 7 дней «Выходные у моря» | 520,00»"}
+    ops:
+      - {op: replace_clause, target: "3.1", effective_from: 2026-03-16, page: 1, quote: "1. Пункт 3.1 Договора изложить в следующей редакции:"}
+      - {op: replace_clause, target: "3.2", effective_from: 2026-03-16, page: 1, quote: "2. Пункт 3.2 Договора изложить в следующей редакции:"}
+      - {op: add_clause, target: "6.2", effective_from: 2026-03-16, page: 1, quote: "3. Дополнить Договор пунктом 6.2 следующего содержания:"}
+
+  # Scanned termination agreement, signed 2026-09-29, ends the contract from 2026-10-01: quotes from the OCR text.
+  - file: "camp/IMG_4471.pdf"
+    doc_id: "9f1999502d0d"
+    kind: supplement
+    is_draft: false
+    number: {value: "D953000003-01", page: 1, quote: "СОГЛАШЕНИЕ № 0953000003-01 о расторжении агентского договора"}
+    doc_date: {value: "2026-09-29", page: 1, quote: "г. Калининград, 29 сентября 2026 г."}
+    city: {value: "Калининград", page: 1, quote: "г. Калининград, 29 сентября 2026 г."}
+    parent_number: {value: "D953000001-01", page: 1, quote: "о расторжении агентского договора № 0953000001-01 от 10.11.2025"}
+    parent_date: {value: "2025-11-10", page: 1, quote: "о расторжении агентского договора № 0953000001-01 от 10.11.2025"}
+    # Clause 5: «вступает в силу немедленно после подписания».
+    effective_from: {value: "2026-09-29", page: 1, quote: "г. Калининград, 29 сентября 2026 г."}
+    effective_to: {value: null, status: absent}
+    subject_category: commercial_representation
+    counterparty_type: {value: "ИП", page: 1, quote: "индивидуальный предприниматель Кочергина Дарья Сергеевна (Агент) заключили"}
+    terms: {}
+    rates: []
+    ops:
+      - {op: terminate, target: null, effective_from: 2026-10-01, page: 1, quote: "1. Стороны по взаимному согласию прекращают действие агентского договора № 0953000001-01 от 10.11.2025 с 01 октября 2026 г."}
+
+chains:
+  - contract_number: "D951000001-01"
+    main_doc_id: "287105850012"
+    order: ["287105850012", "34d710c94552", "9b79b92d31ea", "7d537a6f5052"]
+    invalidated: []
+    status_at:
+      # Without D951000003-01 the contract would have ended on 2026-12-31.
+      2026-10-30: active
+      2027-02-01: active
+    terms_at:
+      2026-10-30: &lab_terms
+        subject: "испытания образцов бетона, строительного раствора и арматурного проката в испытательной лаборатории Исполнителя по заявкам Заказчика с выдачей протоколов испытаний"
+        validity: "с 01.04.2025 по 31.12.2027 включительно"
+        payment_terms: "оплата по счёту, выставленному по итогам месяца, в течение 10 рабочих дней с даты его получения; акт сдачи-приёмки Испытаний за прошедший месяц — до 5-го числа"
+        termination: "Заказчик вправе отказаться от Договора в любое время, оплатив начатые Испытания; Исполнитель — письменно уведомив Заказчика не менее чем за 60 календарных дней"
+        notification_channel: "протоколы, акты и счета размещаются в личном кабинете Заказчика и считаются полученными в день размещения; оригиналы актов — курьером по требованию Заказчика"
+        penalties: "пени Исполнителя 0,5% от цены Испытания за каждый рабочий день просрочки выдачи протокола, не более 10% цены Испытания; пени Заказчика 1/300 ключевой ставки Банка России от неоплаченной суммы за каждый день просрочки оплаты"
+      2027-02-01: *lab_terms
+    rates_at:
+      # The 2025 price list ends on 2026-01-11; the 3 600 visit price ends on 2026-12-31 (D951000004-01, signed
+      # 2026-10-20, sets 4 270 from 2027-01-01).
+      2026-10-30:
+        - {label: "Прочность бетона на сжатие (образцы-кубы), серия из 3 образцов", amount: "2976.00", vat: included, valid_from: 2026-01-12}
+        - {label: "Морозостойкость бетона, 1 марка", amount: "22692.00", vat: included, valid_from: 2026-01-12}
+        - {label: "Водонепроницаемость бетона, 1 марка", amount: "11895.40", vat: included, valid_from: 2026-01-12}
+        - {label: "Растяжение арматурного проката, 1 образец", amount: "1403.00", vat: included, valid_from: 2026-01-12}
+        - {label: "Изгиб арматурного проката, 1 образец", amount: "1219.60", vat: included, valid_from: 2026-01-12}
+        - {label: "Выезд специалиста для отбора проб в пределах Самары, за выезд", amount: "3600", vat: included, valid_from: 2025-04-01, valid_to: 2026-12-31}
+      2027-02-01:
+        - {label: "Прочность бетона на сжатие (образцы-кубы), серия из 3 образцов", amount: "2976.00", vat: included, valid_from: 2026-01-12}
+        - {label: "Морозостойкость бетона, 1 марка", amount: "22692.00", vat: included, valid_from: 2026-01-12}
+        - {label: "Водонепроницаемость бетона, 1 марка", amount: "11895.40", vat: included, valid_from: 2026-01-12}
+        - {label: "Растяжение арматурного проката, 1 образец", amount: "1403.00", vat: included, valid_from: 2026-01-12}
+        - {label: "Изгиб арматурного проката, 1 образец", amount: "1219.60", vat: included, valid_from: 2026-01-12}
+        - {label: "Выезд специалиста для отбора проб в пределах Самары, за выезд", amount: "4270", vat: included, valid_from: 2027-01-01}
+
+  - contract_number: "D952000001-01"
+    main_doc_id: "688c6ea1beea"
+    order: ["688c6ea1beea", "a70f26bfe49a", "ef856bfa8f07"]
+    invalidated: []
+    status_at:
+      2026-10-30: active
+      2027-02-01: active
+    terms_at:
+      2026-10-30: &vending_terms
+        subject: "временное пользование 4 мест площадью 1 кв. м каждое в здании делового центра (г. Ярославль, ул. Свободы, д. 52) для установки торговых автоматов Арендатора: 1-й этаж у главного входа, 2-й этаж у входа в столовую, холлы у лифтов на 3-м и 5-м этажах"
+        validity: "с даты заключения по 31 августа 2027 г."
+        payment_terms: "арендная плата и платёж за подключение к сети — ежеквартально авансом до 10-го числа первого месяца квартала на основании счёта Арендодателя; электроэнергия — в течение 10 рабочих дней с даты получения счёта Арендодателя"
+        termination: "каждая из Сторон вправе отказаться от Договора, уведомив другую Сторону за 2 месяца"
+        notification_channel: "по электронной почте: Арендодателю — arenda@kotorosl-office.example, Арендатору — info@avtomaty-vv.example; требования об уплате неустойки дополнительно почтовым отправлением"
+        penalties: "неустойка 0,1% от просроченной суммы за каждый день просрочки любого платежа"
+      2027-02-01: *vending_terms
+    rates_at:
+      2026-10-30: &vending_rates
+        - {label: "Аренда одного Места в месяц", amount: "7150", vat: included, valid_from: 2026-09-01}
+        - {label: "Подключение Автомата к беспроводной сети, в месяц за Автомат", amount: "980", vat: included, valid_from: 2026-09-01}
+      2027-02-01: *vending_rates
+
+  - contract_number: "D953000001-01"
+    main_doc_id: "b93a28e3901a"
+    order: ["b93a28e3901a", "aba684becfb8", "9f1999502d0d"]
+    invalidated: []
+    status_at:
+      2026-10-30: terminated
+      2027-02-01: terminated
+    terms_at:
+      2026-10-30: {}
+      2027-02-01: {}
+    rates_at:
+      2026-10-30: []
+      2027-02-01: []
+
+clusters:
+  - {category: services, members: ["D951000001-01"]}
+  - {category: lease, members: ["D952000001-01"]}
+  - {category: commercial_representation, members: ["D953000001-01"]}
+
+traps:
+  # chain 1: a start after signing, a restated appendix, an extension past the first end date, a price signed in
+  # advance for 2027, a supplement whose header names no parent
+  - {trap_id: K01, kind: order_is, contract_number: "D951000001-01", expected: {order: ["287105850012", "34d710c94552", "9b79b92d31ea", "7d537a6f5052"]}}
+  - {trap_id: K02, kind: term_value_at, contract_number: "D951000001-01", expected: {as_of: "2026-10-30", term: validity, value: "с 01.04.2025 по 31.12.2027 включительно"}}
+  - {trap_id: K03, kind: status_is, contract_number: "D951000001-01", expected: {as_of: "2027-02-01", status: active}}
+  - {trap_id: K04, kind: rate_planned, contract_number: "D951000001-01", expected: {as_of: "2026-10-30", label: "Выезд специалиста для отбора проб в пределах Самары, за выезд", amount: "4270"}}
+  - {trap_id: K05, kind: normalized_number, contract_number: "D951000001-01", doc_id: "7d537a6f5052", expected: {doc_id: "7d537a6f5052", number: "D951000004-01"}}
+  - {trap_id: K06, kind: doc_kind_is, contract_number: "D951000001-01", doc_id: "9b79b92d31ea", expected: {doc_id: "9b79b92d31ea", kind: supplement}}
+  # chain 2: VAT in one clause for all sums, the whole contract restated with its own entry-into-force clause, a
+  # deleted fine, a supplement silent about its start
+  - {trap_id: K07, kind: order_is, contract_number: "D952000001-01", expected: {order: ["688c6ea1beea", "a70f26bfe49a", "ef856bfa8f07"]}}
+  - {trap_id: K08, kind: doc_kind_is, contract_number: "D952000001-01", doc_id: "a70f26bfe49a", expected: {doc_id: "a70f26bfe49a", kind: supplement}}
+  - {trap_id: K09, kind: term_value_at, contract_number: "D952000001-01", expected: {as_of: "2026-10-30", term: penalties, value: "неустойка 0,1% от просроченной суммы за каждый день просрочки любого платежа"}}
+  - {trap_id: K10, kind: term_value_at, contract_number: "D952000001-01", expected: {as_of: "2026-10-30", term: payment_terms, value: "арендная плата и платёж за подключение к сети — ежеквартально авансом до 10-го числа первого месяца квартала на основании счёта Арендодателя; электроэнергия — в течение 10 рабочих дней с даты получения счёта Арендодателя"}}
+  - {trap_id: K11, kind: status_is, contract_number: "D952000001-01", expected: {as_of: "2027-02-01", status: active}}
+  # chain 3: fees with no VAT wording, no end date, termination before both dates in a scan
+  - {trap_id: K12, kind: order_is, contract_number: "D953000001-01", expected: {order: ["b93a28e3901a", "aba684becfb8", "9f1999502d0d"]}}
+  - {trap_id: K13, kind: normalized_number, contract_number: "D953000001-01", doc_id: "9f1999502d0d", expected: {doc_id: "9f1999502d0d", number: "D953000003-01"}}
+  - {trap_id: K14, kind: status_is, contract_number: "D953000001-01", expected: {as_of: "2026-10-30", status: terminated}}
+  - {trap_id: K15, kind: status_is, contract_number: "D953000001-01", expected: {as_of: "2027-02-01", status: terminated}}
+
+scans:
+  - file: "lab/Скан_20261021.pdf"
+    page: 1
+    text: |-
+      ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № D951000004-01
+      к рамочному договору № D951000001-01 от 17.03.2025
+      г. Самара, 20 октября 2026 г.
+      ООО «Волгастройлаб» (Исполнитель) в лице директора Старостина Глеба Аркадьевича и
+      АО «СКЖБИ» (Заказчик) в лице технического директора Халиуллина Артура Ринатовича
+      согласовали следующее.
+      1. Пункт 3.4 Договора изложить в редакции:
+      «3.4. Выезд специалиста Исполнителя для отбора проб на объекте Заказчика в пределах
+      Самары оплачивается в размере 4 270 (четырёх тысяч двухсот семидесяти) рублей за
+      выезд, в том числе налог на добавленную стоимость.»
+      2. Пункт 3.4 Договора в новой редакции применяется к выездам, выполненным с 1 января
+      2027 г.
+      3. Настоящее соглашение вступает в силу с даты, указанной в его заголовке.
+      Исполнитель: ООО «Волгастройлаб» ____________ Г. А. Старостин
+      Заказчик: АО «СКЖБИ» ____________ А. Р. Халиуллин
+  - file: "camp/IMG_4471.pdf"
+    page: 1
+    text: |-
+      СОГЛАШЕНИЕ № D953000003-01
+      о расторжении агентского договора № D953000001-01 от 10.11.2025
+      г. Калининград, 29 сентября 2026 г.
+      ООО «Янтарная смена» (Принципал) в лице директора Нестеренко Веры Анатольевны и
+      индивидуальный предприниматель Кочергина Дарья Сергеевна (Агент) заключили
+      настоящее соглашение о нижеследующем.
+      1. Стороны по взаимному согласию прекращают действие агентского договора №
+      D953000001-01 от 10.11.2025 с 01 октября 2026 г.
+      2. Вознаграждение за Путёвки, реализованные по 30 сентября 2026 г. включительно,
+      выплачивается на условиях Договора после утверждения итогового отчёта агента.
+      3. Агент представляет итоговый отчёт агента не позднее 9 октября 2026 г.
+      4. Обязанность Агента сохранять конфиденциальность персональных данных
+      покупателей действует и после прекращения Договора.
+      5. Соглашение подписано в двух экземплярах и вступает в силу немедленно после
+      подписания.
+      Принципал: ООО «Янтарная смена» ____________ В. А. Нестеренко
+      Агент: ИП Кочергина Д. С. ____________ Д. С. Кочергина
